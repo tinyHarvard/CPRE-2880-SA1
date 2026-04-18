@@ -2,7 +2,7 @@
 
 ## What You Need
 
-## Figure out a way to integrate the IMU into the code
+## Figure out a way to integrate the IMU into the code and send data through UART.
 
 Your instructor provides two pre-built libraries for the TM4C123 target:
 
@@ -98,5 +98,3 @@ CCS needs a startup file (`tm4c123gh6pm_startup_ccs.c`) with the interrupt vecto
 1. Create a new empty CCS project for the TM4C123GH6PM target
 2. Copy the auto-generated `tm4c123gh6pm_startup_ccs.c` from that project
 3. Add it to each lab project via **Add Files...**
-
-Or ask your instructor — they may provide this file directly.
