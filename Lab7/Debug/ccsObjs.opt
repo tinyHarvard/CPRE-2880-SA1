@@ -1,0 +1,11 @@
+"./Timer.obj"
+"./button.obj"
+"./lab7_main.obj"
+"./lcd.obj"
+"./movement.obj"
+"./navigation.obj"
+"./open_interface.obj"
+"./scan.obj"
+"./uart.obj"
+"../tm4c123gh6pm.cmd"
+-llibc.a
