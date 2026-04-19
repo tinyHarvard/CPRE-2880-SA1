@@ -22,9 +22,9 @@
 #include "ping_template.h"
 #include "adc.h"
 
-#define AVOID_DIST_CM     30.0f   // trigger avoidance if object within 30cm
+#define AVOID_DIST_CM     3.0f   // trigger avoidance if object within 30cm
 #define TURN_SPEED        100     // oi turn speed mm/s
-#define DRIVE_SPEED       200     // oi drive speed mm/s
+#define DRIVE_SPEED       100     // oi drive speed mm/s
 #define AVOID_BACK_MM     150     // back up 150mm when obstacle detected
 #define AVOID_TURN_DEG    90      // turn 90 degrees to avoid obstacle
 
