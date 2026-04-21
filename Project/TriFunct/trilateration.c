@@ -20,7 +20,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#define PATH_LOSS_EXP  2.5
+#define path_loss_exp  2.5
 
 /* -------------------------------------------------------------------------
  * Internal helper
