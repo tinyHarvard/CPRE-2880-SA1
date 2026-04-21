@@ -188,10 +188,10 @@ PosResult locate_device(double tx_power[], double rssi[])
 /**
  * Log-distance path-loss model: d = 10^( (TxPower - RSSI) / (10·n) )
  */
-double rssi_to_distance(double tx_power_dbm, double rssi_dbm,
+double rssi_to_distance(double tx_power, double rssi,
                         double path_loss_exp)
 {
-    return pow(10.0, (tx_power_dbm - rssi_dbm) / (10.0 * path_loss_exp));
+    return pow(10.0, (tx_power - rssi) / (10.0 * path_loss_exp));
 }
 
 /* -------------------------------------------------------------------------
