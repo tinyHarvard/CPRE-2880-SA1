@@ -107,8 +107,6 @@ PosResult trilaterate_3anchors(Circle c1, Circle c2, Circle c3);
  */
 PosResult trilaterate_nd(const Circle *circles, int n);
 
-PosResult locate_device(double tx_power[], double rssi[]);
-
 /* -------------------------------------------------------------------------
  * BLE RSSI utility
  * ---------------------------------------------------------------------- */
@@ -132,6 +130,8 @@ PosResult locate_device(double tx_power[], double rssi[]);
  */
 double rssi_to_distance(double tx_power_dbm, double rssi_dbm,
                         double path_loss_exp);
+
+PosResult locate_device(double tx_power[], double rssi[]);
 
 #ifdef __cplusplus
 }
