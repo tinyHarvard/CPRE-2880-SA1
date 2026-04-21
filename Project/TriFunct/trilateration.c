@@ -154,6 +154,37 @@ PosResult trilaterate_nd(const Circle *circles, int n)
     return res;
 }
 
+/* -------------------------------------------------------------------------
+ * Anchor-based positioning — set anchor positions here before running
+ * ---------------------------------------------------------------------- */
+
+typedef struct {
+    double x;
+    double y;
+} Anchor;
+
+static Anchor anchors[] = {
+    //  x       y
+    { -30.0,  20.0 },   // anchor 0
+    {  35.0,  70.0 },   // anchor 1
+    { 100.0,  20.0 },   // anchor 2
+    {  35.0, -30.0 },   // anchor 3
+};
+
+PosResult locate_device(double tx_power[], double rssi[])
+{
+    int n = sizeof(anchors) / sizeof(anchors[0]);
+    Circle circles[n];
+
+    for (int i = 0; i < n; i++) {
+        circles[i].pos.x  = anchors[i].x;
+        circles[i].pos.y  = anchors[i].y;
+        circles[i].radius = rssi_to_distance(tx_power[i], rssi[i], path_loss_exp);
+    }
+
+    return trilaterate_nd(circles, n);
+}
+
 /**
  * Log-distance path-loss model: d = 10^( (TxPower - RSSI) / (10·n) )
  */
