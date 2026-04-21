@@ -20,7 +20,6 @@
 #include <string.h>
 #include <stdio.h>
 
-#define TX_POWER_DBM  -59.0
 #define PATH_LOSS_EXP  2.5
 
 /* -------------------------------------------------------------------------
