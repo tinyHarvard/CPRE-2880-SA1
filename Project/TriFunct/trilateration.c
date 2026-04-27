@@ -20,7 +20,8 @@
 #include <string.h>
 #include <stdio.h>
 
-#define path_loss_exp  2.5
+#define PATH_LOSS_EXP  2.5
+#define TX_POWER_1M   -62.0
 
 /* -------------------------------------------------------------------------
  * Internal helper
@@ -171,7 +172,7 @@ static Anchor anchors[] = {
     {  35.0, -30.0 },   // anchor 3
 };
 
-PosResult locate_device(double tx_power[], double rssi[])
+PosResult locate_device(double rssi[])
 {
     int n = sizeof(anchors) / sizeof(anchors[0]);
     Circle circles[n];
@@ -179,7 +180,7 @@ PosResult locate_device(double tx_power[], double rssi[])
     for (int i = 0; i < n; i++) {
         circles[i].pos.x  = anchors[i].x;
         circles[i].pos.y  = anchors[i].y;
-        circles[i].radius = rssi_to_distance(tx_power[i], rssi[i], path_loss_exp);
+        circles[i].radius = rssi_to_distance(TX_POWER_1M, rssi[i], PATH_LOSS_EXP);
     }
 
     return trilaterate_nd(circles, n);
@@ -188,10 +189,9 @@ PosResult locate_device(double tx_power[], double rssi[])
 /**
  * Log-distance path-loss model: d = 10^( (TxPower - RSSI) / (10·n) )
  */
-double rssi_to_distance(double tx_power, double rssi,
-                        double path_loss_exp)
+double rssi_to_distance(double tx_power, double rssi_dbm, double n)
 {
-    return pow(10.0, (tx_power - rssi) / (10.0 * path_loss_exp));
+    return pow(10.0, (tx_power - rssi_dbm) / (10.0 * n));
 }
 
 /* -------------------------------------------------------------------------
