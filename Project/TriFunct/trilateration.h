@@ -131,7 +131,7 @@ PosResult trilaterate_nd(const Circle *circles, int n);
 double rssi_to_distance(double tx_power_dbm, double rssi_dbm,
                         double path_loss_exp);
 
-PosResult locate_device(double tx_power[], double rssi[]);
+PosResult locate_device(double rssi[]);
 
 #ifdef __cplusplus
 }
