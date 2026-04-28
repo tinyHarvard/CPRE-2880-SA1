@@ -172,6 +172,14 @@ static Anchor anchors[] = {
     {  35.0, -30.0 },   // anchor 3
 };
 
+/**
+ * Log-distance path-loss model: d = 10^( (TxPower - RSSI) / (10·n) )
+ */
+double rssi_to_distance(double tx_power, double rssi_dbm, double n)
+{
+    return pow(10.0, (tx_power - rssi_dbm) / (10.0 * n));
+}
+
 PosResult locate_device(double rssi[])
 {
     int n = sizeof(anchors) / sizeof(anchors[0]);
@@ -186,13 +194,6 @@ PosResult locate_device(double rssi[])
     return trilaterate_nd(circles, n);
 }
 
-/**
- * Log-distance path-loss model: d = 10^( (TxPower - RSSI) / (10·n) )
- */
-double rssi_to_distance(double tx_power, double rssi_dbm, double n)
-{
-    return pow(10.0, (tx_power - rssi_dbm) / (10.0 * n));
-}
 
 /* -------------------------------------------------------------------------
  * Optional standalone test  (compile with -DTRILATERATION_TEST)
