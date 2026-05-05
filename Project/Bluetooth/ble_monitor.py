@@ -21,11 +21,11 @@ import numpy as np
 # ── Config ────────────────────────────────────────────────────────────────────
 BAUD            = 115200
 WINDOW          = 50        # rolling RSSI window (~5 packets/sec)
-DWELL_TIME      = 10.0      # seconds to collect at each stop
+DWELL_TIME      = 20.0      # seconds to collect at each stop
 MIN_SAMPLES_POS = 50        # minimum samples before a stop is "ready"
 AUTO_ADVANCE    = False     # True = auto-advance after DWELL_TIME
                             # False = wait for "Next Position" button
-TRANSIT_TIME    = 5.0       # seconds between stops for bot to travel
+TRANSIT_TIME    = 2.0       # seconds between stops for bot to travel
 
 # ── Filtering config ──────────────────────────────────────────────────────────
 ZSCORE_THRESH   = 2.0
@@ -79,7 +79,7 @@ def find_arduino_port():
 # ── Serial parser ─────────────────────────────────────────────────────────────
 def parse_arduino_line(line: str):
     line = line.strip()
-    if not line or line.startswith("#"):
+    if not line or line.startswith("#") or line.startswith("tx_id") or line.startswith("ERR"):
         return None
     parts = line.split(",")
     if len(parts) != 6:
@@ -99,10 +99,9 @@ def arduino_reader_thread(port: str):
                 print(f"[Sensor] Serial open on {port}")
                 while True:
                     raw = ser.readline().decode("utf-8", errors="ignore")
-                    if not raw.strip():
-                        continue
+                    print(f"[DEBUG] raw: {repr(raw)}")   # temporary debug
                     row = parse_arduino_line(raw)
-                    if not row:
+                    if row is None:
                         continue
                     with state_lock:
                         stop = current_stop
@@ -111,8 +110,11 @@ def arduino_reader_thread(port: str):
                         continue
                     with data_lock:
                         rssi_buffers[stop].append(row["rssi"])
+        except serial.SerialException as e:
+            print(f"[Sensor] Serial error ({e}), retrying in 2s…")
+            time.sleep(2)
         except Exception as e:
-            print(f"[Sensor] Serial error ({e}), retrying…")
+            print(f"[Sensor] Unexpected error ({e}), retrying in 2s…")
             time.sleep(2)
 
 
@@ -456,16 +458,16 @@ def run_plot():
                 transit_remaining = max(0.0, TRANSIT_TIME - elapsed)
                 dest_pos = anchor_pos[t_to] if t_to >= 0 else "?"
                 pos_banner.set_text(
-                    f"🚗 In transit → Stop {t_to}  {dest_pos} "
+                    f"In transit -> Stop {t_to}  {dest_pos} "
                     f"  ({transit_remaining:.1f}s remaining)")
             elif AUTO_ADVANCE:
                 remaining = max(0.0, DWELL_TIME - elapsed)
                 pos_banner.set_text(
-                    f"📍 Stop {stop} / {NUM_ANCHORS-1}  —  Position {anchor_pos[stop]}"
+                    f"Stop {stop} / {NUM_ANCHORS-1}  —  Position {anchor_pos[stop]}"
                     f"  |  Collecting ({remaining:.1f}s left, {len(bufs[stop])} samples)")
             else:
                 pos_banner.set_text(
-                    f"📍 Stop {stop} / {NUM_ANCHORS-1}  —  Position {anchor_pos[stop]}"
+                    f"Stop {stop} / {NUM_ANCHORS-1}  —  Position {anchor_pos[stop]}"
                     f"  |  {len(bufs[stop])} samples  |  Press 'Next Position' when ready")
         else:
             ready_ids = [i for i in range(NUM_ANCHORS) if ready[i] and i in avg_data]
@@ -489,8 +491,8 @@ def run_plot():
         return ([target_dot, sensor_dot, pos_banner, rssi_line]
                 + list(range_circles.values()))
 
-    animation.FuncAnimation(fig, update, interval=150,
-                            blit=False, cache_frame_data=False)
+    ani = animation.FuncAnimation(fig, update, interval=150,
+                                  blit=False, cache_frame_data=False)
     plt.show()
 
 
