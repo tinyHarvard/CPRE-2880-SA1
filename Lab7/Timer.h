@@ -8,9 +8,10 @@
 #ifndef TIMER_H_
 #define TIMER_H_
 
-#include <inc/tm4c123gh6pm.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <inc/tm4c123gh6pm.h>
+#include "inc/hw_types.h"
 #include "driverlib/interrupt.h"
 
 /**

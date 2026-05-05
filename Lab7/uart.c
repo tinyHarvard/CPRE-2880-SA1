@@ -21,8 +21,10 @@
  * - Lab 6: Added uart_receive_nonblocking() for stop-scan command support
  */
 
-#include <inc/tm4c123gh6pm.h>
+#include <stdbool.h>
 #include <stdint.h>
+#include <inc/tm4c123gh6pm.h>
+#include "inc/hw_types.h"
 #include "driverlib/interrupt.h"
 #include "uart.h"
 

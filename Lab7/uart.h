@@ -21,7 +21,10 @@
  #ifndef UART_H_
  #define UART_H_
 
+ #include <stdbool.h>
+ #include <stdint.h>
  #include <inc/tm4c123gh6pm.h>
+ #include "inc/hw_types.h"
  #include "driverlib/interrupt.h"
 
  /**

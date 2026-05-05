@@ -21,6 +21,7 @@
 #include <inc/tm4c123gh6pm.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "inc/hw_types.h"
 #include "driverlib/interrupt.h"
 
 /* Notice that interrupt.h provides library function prototypes for
