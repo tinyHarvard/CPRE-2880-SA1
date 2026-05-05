@@ -50,8 +50,8 @@ NUM_ANCHORS = 4       # number of virtual anchor positions to visit
 DEFAULT_ANCHOR_POS = {  # tight ring r=80 centered on expected target area
     0: (-100.0,   0.0),
     1: (100.0,   0.0),
-    2: ( 0.0,  100.0),
-    3: ( 0.0, -100.0),
+    2: ( 50.0,  87.0),
+    3: ( 50.0, -87.0),
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -132,7 +132,6 @@ def laptop_ble_thread():
         print(f"[Sensor] BLE error: {e}")
 
 
-# ── Arduino serial reader ─────────────────────────────────────────────────────
 def arduino_reader_thread(port: str):
     print(f"[Sensor] Connecting to {port} …")
     while True:
@@ -141,13 +140,15 @@ def arduino_reader_thread(port: str):
                 print(f"[Sensor] Serial open on {port}")
                 while True:
                     raw = ser.readline().decode("utf-8", errors="ignore")
+                    if not raw.strip():
+                        continue
                     row = parse_arduino_line(raw)
                     if not row:
                         continue
                     with state_lock:
                         stop = current_stop
                         done = not collecting
-                    if done or stop < 0:   # stop < 0 means in transit
+                    if done or stop < 0:
                         continue
                     with data_lock:
                         rssi_buffers[stop].append(row["rssi"])
@@ -167,7 +168,7 @@ def stop_manager_thread():
         if stop_idx > 0:
             print(f"[MOVE] Travelling to position {stop_idx} — pausing {TRANSIT_TIME}s…")
             with state_lock:
-                current_stop = -1   # mark as in-transit so no samples are recorded
+                current_stop = -1
             time.sleep(TRANSIT_TIME)
 
         with state_lock:
@@ -184,17 +185,46 @@ def stop_manager_thread():
             advance_event.clear()
             advance_event.wait()
 
-        # Mark stop as ready if enough samples were collected
+        # Mark stop as ready and print sample count summary
         with data_lock:
             n = len(rssi_buffers[stop_idx])
+            buf = list(rssi_buffers[stop_idx])
         with state_lock:
             stop_ready[stop_idx] = (n >= MIN_SAMPLES_POS)
 
-        print(f"[MOVE] Stop {stop_idx} done — {n} samples, ready={stop_ready[stop_idx]}")
+        avg = sum(buf) / len(buf) if buf else 0
+        print(f"[STOP {stop_idx}] Samples collected: {n}  |  "
+              f"Avg RSSI: {avg:.1f} dBm  |  "
+              f"Ready: {stop_ready[stop_idx]}")
 
     with state_lock:
         collecting = False
-    print("\n[MOVE] All stops complete — trilateration active.")
+
+    # Print final summary and trilateration result
+    print("\n=== Collection Complete ===")
+    circles = []
+    for i in range(NUM_ANCHORS):
+        with data_lock:
+            buf = list(rssi_buffers[i])
+        n = len(buf)
+        if n == 0:
+            print(f"  Stop {i}: 0 samples — skipped")
+            continue
+        filt = filter_rssi(buf)
+        med  = statistics.median(filt)
+        dist = rssi_to_distance(med)
+        circles.append((anchor_pos[i], dist))
+        print(f"  Stop {i} {anchor_pos[i]}: {n} samples  "
+              f"median RSSI={med:.1f} dBm  dist={dist:.2f} units")
+
+    if len(circles) >= 3:
+        result = trilaterate(circles)
+        if result:
+            print(f"\n>>> Estimated TX position: ({result[0]:.2f}, {result[1]:.2f})")
+        else:
+            print("\n>>> Trilateration failed — degenerate geometry")
+    else:
+        print(f"\n>>> Not enough stops with data ({len(circles)}/3 minimum)")
 
 
 # ── RSSI filtering ────────────────────────────────────────────────────────────
@@ -413,9 +443,12 @@ def run_plot():
         with data_lock:
             bufs = {i: list(rssi_buffers[i]) for i in range(NUM_ANCHORS)}
 
-        # show sensor position on map
-        sx, sy = anchor_pos[stop]
-        sensor_dot.set_data([sx], [sy])
+        # show sensor position on map — skip during transit (stop = -1)
+        if stop >= 0:
+            sx, sy = anchor_pos[stop]
+            sensor_dot.set_data([sx], [sy])
+        else:
+            sensor_dot.set_data([], [])
 
         # update table and range circles
         avg_data = {}
@@ -451,7 +484,7 @@ def run_plot():
             tbl[i+1, 5].get_text().set_text(status)
 
         # live RSSI for current stop
-        cur_buf = filter_rssi(bufs[stop]) if bufs[stop] else []
+        cur_buf = filter_rssi(bufs[stop]) if stop >= 0 and bufs[stop] else []
         rssi_line.set_data(range(len(cur_buf)), cur_buf)
 
         # progress / instruction banner
@@ -505,18 +538,18 @@ if __name__ == "__main__":
     for sid, (x, y) in anchor_pos.items():
         print(f"  Stop {sid}: ({x}, {y})")
 
-    # Start sensor thread (BLE or serial — use whichever is available)
     port = find_arduino_port()
-    if port:
-        print(f"[SETUP] Using Arduino on {port}")
-        threading.Thread(target=arduino_reader_thread,
-                         args=(port,), daemon=True).start()
-    else:
-        print("[SETUP] No Arduino found — using laptop BLE")
-        threading.Thread(target=laptop_ble_thread, daemon=True).start()
+    if not port:
+        print("[ERROR] No serial port found. Plug in the RX Arduino and retry.")
+        exit(1)
 
-    # Start stop manager thread
+    print(f"[SETUP] Using Arduino on {port}")
+    threading.Thread(target=arduino_reader_thread,
+                     args=(port,), daemon=True).start()
+
     threading.Thread(target=stop_manager_thread, daemon=True).start()
+
+    run_plot()
 
     # Main plot
     run_plot()
