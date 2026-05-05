@@ -68,7 +68,11 @@ typedef struct {
  * @param max_count  Maximum number of objects to store (array size)
  * @return           Number of objects actually detected (0 to max_count)
  */
-void calibrate_servo(void);
+/**
+ * scan_init - One-shot initializer for servo + PING + IR.
+ * Replaces cyBOT_init_Scan(0b0111). Call once at startup.
+ */
+void scan_init(void);
 
 int gap_measurment(detected_obj_t objects[], int obj_count, detected_gap_t gap[]);
 

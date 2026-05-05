@@ -11,7 +11,7 @@
  *   Pass 1 sweeps the servo 0-180 degrees collecting IR sensor data.
  *   Multiple IR readings are averaged at each angle to reduce noise.
  *   The IR values are used for edge detection because the IR beam is narrower
- *   than the PING cone — think of IR as a laser pointer vs PING as a flashlight.
+ *   than the PING cone ï¿½ think of IR as a laser pointer vs PING as a flashlight.
  *   Pass 2 points the servo at each detected object center and takes a PING
  *   distance measurement.
  *
@@ -25,14 +25,16 @@
  *   PING: Wide cone, low noise, less angular precision => use for distance only
  *
  * REVISION NOTES:
- * - Lab 7: New file — replaces Lab 3 PING-only scan with IR+PING approach
+ * - Lab 7: New file ï¿½ replaces Lab 3 PING-only scan with IR+PING approach
  */
 
-#include "cyBot_Scan.h"
 #include "uart.h"
 #include "lcd.h"
 #include "Timer.h"
 #include "scan.h"
+#include "ping.h"
+#include "ir.h"
+#include "servo.h"
 #include <stdio.h>
 
 /* ---- Scan configuration ------------------------------------------------- */
@@ -63,7 +65,7 @@
  *
  * Calls cyBOT_Scan() NUM_SAMPLES times at the given angle, summing the
  * IR distance values and returning the average. This is like taking the
- * temperature 5 times and averaging — any single bad reading gets diluted.
+ * temperature 5 times and averaging ï¿½ any single bad reading gets diluted.
  *
  * Note: We only use the IR distance (scan_data.IR_raw_val is the raw ADC
  * value, but cyBOT_Scan already converts it to sound_dist and IR_raw_val).
@@ -74,41 +76,41 @@
  * @param ping_out   Pointer to store the last PING reading (cm), or NULL
  * @return           Averaged IR raw ADC value at this angle
  */
-void calibrate_servo(void) {
-    cyBOT_SERVRO_cal_t cal;
-        char msg[80];
-
-        uart_sendStr("\r\n--- Starting Servo Calibration ---\r\n");
-        uart_sendStr("Watch the servo sweep to find its endpoints...\r\n");
-
-        cal = cyBOT_SERVO_cal();
-
-        right_calibration_value = cal.right;
-        left_calibration_value  = cal.left;
-
-        sprintf(msg, "Calibration complete:\r\n"
-                     "  Right (0 deg):   %d\r\n"
-                     "  Left  (180 deg): %d\r\n", cal.right, cal.left);
-        uart_sendStr(msg);
+/**
+ * scan_init - One-shot initializer for servo + PING + IR.
+ *
+ * Replaces cyBOT_init_Scan(0b0111) from the old library. Call this once at
+ * startup before any scan_objects() / average_ir_reading() / etc.
+ */
+void scan_init(void)
+{
+    servo_init();
+    ping_init();
+    ir_init();
 }
 
-
+/**
+ * average_ir_reading - Sample IR_NUM_SAMPLES times at one angle and average.
+ *
+ * Moves the servo to the requested angle once (servo_move includes its own
+ * settle delay), then takes N raw ADC samples back-to-back. Optionally
+ * returns a PING distance for the same angle if ping_out != NULL.
+ */
 static float average_ir_reading(int angle, float *ping_out)
 {
-    cyBOT_Scan_t scan_data;
     float ir_sum = 0.0f;
-    int i;
+    int   i;
+
+    servo_move(angle);
 
     for (i = 0; i < IR_NUM_SAMPLES; i++)
     {
-        cyBOT_Scan(angle, &scan_data);
-        ir_sum += scan_data.IR_raw_val;
+        ir_sum += (float)ir_readRaw();
     }
 
-    /* Store the last PING reading if the caller wants it */
     if (ping_out != NULL)
     {
-        *ping_out = scan_data.sound_dist;
+        *ping_out = ping_getDistance();
     }
 
     return ir_sum / IR_NUM_SAMPLES;
@@ -142,14 +144,13 @@ int scan_objects(detected_obj_t objects[], int max_count)
     int tracking = 0;           /* 0 = SEARCHING, 1 = TRACKING */
     int current_start = 0;
     float avg_ir;
-    cyBOT_Scan_t settle;
     int i;
 
-    /* Pre-scan settle: move servo to start position and discard first reading.
-     * This prevents the servo from still moving during the first real reading,
-     * which would blur the data — like taking a photo while the camera is
-     * still panning.                                                         */
-    cyBOT_Scan(SCAN_START, &settle);
+    /* Pre-scan settle: park servo at SCAN_START before the first reading.
+     * Prevents a blurred reading caused by the servo still moving when we
+     * first sample. servo_move includes its own settle delay; the extra
+     * 200 ms covers the long jump from wherever the turret was previously. */
+    servo_move(SCAN_START);
     timer_waitMillis(200);
 
     uart_sendStr("\r\n--- Pass 1: IR Edge Detection Scan ---\r\n");
@@ -184,7 +185,7 @@ int scan_objects(detected_obj_t objects[], int max_count)
             /* TRACKING state: look for IR value to drop below threshold */
             if (avg_ir <= IR_THRESHOLD)
             {
-                /* Object edge ended — record it if wide enough */
+                /* Object edge ended ï¿½ record it if wide enough */
                 int width = (angle - SCAN_STEP) - current_start;
                 if (width >= MIN_OBJ_WIDTH && obj_count < max_count)
                 {
@@ -225,20 +226,17 @@ int scan_objects(detected_obj_t objects[], int max_count)
 
     for (i = 0; i < obj_count; i++)
     {
-        cyBOT_Scan_t ping_data;
-        int rounded_angle = (int)(objects[i].center_angle + 0.5f);
-        cyBOT_Scan(rounded_angle, &ping_data);
-        timer_waitMicros(50);
-        cyBOT_Scan(rounded_angle, &ping_data);
-         float bob=ping_data.sound_dist;
-         cyBOT_Scan(rounded_angle, &ping_data);//use mode insted
-         float bob1=ping_data.sound_dist;
+        int   rounded_angle = (int)(objects[i].center_angle + 0.5f);
+        float p1, p2, p3;
 
-        cyBOT_Scan(rounded_angle, &ping_data);
-        float bob2=ping_data.sound_dist;
+        /* Move servo once, then take three averaged PING samples for stability */
+        servo_move(rounded_angle);
+        p1 = ping_getDistance();
+        p2 = ping_getDistance();
+        p3 = ping_getDistance();
 
-        objects[i].ping_dist = (bob1+bob+bob2)/3;
-        objects[i].ir_value  = ping_data.IR_raw_val;
+        objects[i].ping_dist = (p1 + p2 + p3) / 3.0f;
+        objects[i].ir_value  = (float)ir_readRaw();
 
         /* Linear width calculation (Lab 7 Part 2):
          * Convert radial width from degrees to radians, then multiply by
