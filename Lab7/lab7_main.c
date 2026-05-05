@@ -109,7 +109,10 @@ void main(void)
     /* Step 3: Custom UART1 (Part 3 requirement)
      * Uses our uart_init() from Lab 6 uart.c — NOT cyBot_uart_init().
      * This configures UART1 on PB0 (Rx) and PB1 (Tx) for 115200 baud.    */
-    uart_init();
+    uart_interrupt_init();
+    command_byte = 'q';
+    command_flag = 0;
+    last_char_received = 0;
 
     /* Step 4: Scan subsystem (servo + PING + IR)
      * Bit mask 0b0111: bit0 = servo, bit1 = PING sensor, bit2 = IR sensor
@@ -143,7 +146,14 @@ void main(void)
     /* ---- Main command loop ---------------------------------------------- */
     while (1)
     {
-        received = uart_receive();  /* Blocking wait for user command */
+        if (last_char_received == 0)
+        {
+            timer_waitMillis(1);
+            continue;
+        }
+
+        received = last_char_received;
+        last_char_received = 0;
 
         switch (received)
         {
@@ -184,9 +194,31 @@ void main(void)
 
         /* ---- 'g': Autonomous drive to target (Part 4 checkpoint) -------- */
         case 'g':
-            nav_auto_drive(sensor_data);
+        {
+            float target_cm = 0.0f;
+            float target_deg = 90.0f;
+
+            lcd_clear();
+            lcd_printf("Scanning...");
+
+            obj_count = scan_objects(objects, MAX_OBJECTS);
+            print_object_table(objects, obj_count);
+            smallest_idx = find_smallest_linear(objects, obj_count);
+
+            if (smallest_idx < 0)
+            {
+                uart_sendStr("\r\nNo objects found.\r\n");
+                print_menu();
+                break;
+            }
+
+            target_cm = objects[smallest_idx].ping_dist;
+            target_deg = objects[smallest_idx].center_angle;
+
+            nav_auto_drive(sensor_data, target_cm, target_deg);
             print_menu();
             break;
+        }
 
         /* ---- 't': Toggle to manual mode (Part 5 bonus) ------------------ */
         case 't':

@@ -22,6 +22,7 @@
  #define UART_H_
 
  #include <inc/tm4c123gh6pm.h>
+ #include "driverlib/interrupt.h"
 
  /**
   * uart_init - Full UART1 device initialization
@@ -31,6 +32,14 @@
   * Must be called before any uart_sendChar/uart_receive calls.
   */
  void uart_init(void);
+
+ /**
+  * uart_interrupt_init - UART1 init with RX interrupt support
+  *
+  * Configures UART1 and enables RX interrupts so incoming bytes
+  * are handled by UART1_Handler.
+  */
+ void uart_interrupt_init(void);
 
  /**
   * uart_sendChar - Transmit a single byte over UART1
@@ -73,5 +82,13 @@
   * @param[in] data  Pointer to a null-terminated C string
   */
  void uart_sendStr(const char *data);
+
+ /* ISR-shared state (set in UART1_Handler, read by main/navigation) */
+ extern volatile char command_byte;
+ extern volatile int  command_flag;
+ extern volatile char last_char_received;
+
+ /* Interrupt handler for UART1 RX */
+ void UART1_Handler(void);
 
  #endif /* UART_H_ */

@@ -11,7 +11,7 @@
  *   Pass 1 sweeps the servo 0-180 degrees collecting IR sensor data.
  *   Multiple IR readings are averaged at each angle to reduce noise.
  *   The IR values are used for edge detection because the IR beam is narrower
- *   than the PING cone — think of IR as a laser pointer vs PING as a flashlight.
+ *   than the PING cone ï¿½ think of IR as a laser pointer vs PING as a flashlight.
  *   Pass 2 points the servo at each detected object center and takes a PING
  *   distance measurement.
  *
@@ -25,7 +25,7 @@
  *   PING: Wide cone, low noise, less angular precision => use for distance only
  *
  * REVISION NOTES:
- * - Lab 7: New file — replaces Lab 3 PING-only scan with IR+PING approach
+ * - Lab 7: New file ï¿½ replaces Lab 3 PING-only scan with IR+PING approach
  */
 
 #include "cyBot_Scan.h"
@@ -34,6 +34,7 @@
 #include "Timer.h"
 #include "scan.h"
 #include <stdio.h>
+#include <math.h>
 
 /* ---- Scan configuration ------------------------------------------------- */
 #define SCAN_START      0       /* starting angle in degrees                  */
@@ -63,7 +64,7 @@
  *
  * Calls cyBOT_Scan() NUM_SAMPLES times at the given angle, summing the
  * IR distance values and returning the average. This is like taking the
- * temperature 5 times and averaging — any single bad reading gets diluted.
+ * temperature 5 times and averaging ï¿½ any single bad reading gets diluted.
  *
  * Note: We only use the IR distance (scan_data.IR_raw_val is the raw ADC
  * value, but cyBOT_Scan already converts it to sound_dist and IR_raw_val).
@@ -147,7 +148,7 @@ int scan_objects(detected_obj_t objects[], int max_count)
 
     /* Pre-scan settle: move servo to start position and discard first reading.
      * This prevents the servo from still moving during the first real reading,
-     * which would blur the data — like taking a photo while the camera is
+     * which would blur the data ï¿½ like taking a photo while the camera is
      * still panning.                                                         */
     cyBOT_Scan(SCAN_START, &settle);
 
@@ -184,7 +185,7 @@ int scan_objects(detected_obj_t objects[], int max_count)
             /* TRACKING state: look for IR value to drop below threshold */
             if (avg_ir <= IR_THRESHOLD)
             {
-                /* Object edge ended — record it if wide enough */
+                /* Object edge ended ï¿½ record it if wide enough */
                 int width = (angle - SCAN_STEP) - current_start;
                 if (width >= MIN_OBJ_WIDTH && obj_count < max_count)
                 {
@@ -309,7 +310,7 @@ void print_object_table(detected_obj_t objects[], int obj_count)
 
     for (i = 0; i < obj_count; i++)
     {
-        sprintf(line, "%-6d%-12.1f%-12.1f%-14d%-14.1f%-10.0f %d %d\r\n",
+        sprintf(line, "%-6d%-12.1f%-12.1f%-14d%-14.1f%-10.0f %d %d%s\r\n",
                 i + 1,
                 objects[i].center_angle,
                 objects[i].ping_dist,
@@ -373,158 +374,147 @@ for (i = 0; i < gap_count; i++){
 return 0;
 }
 
- int select_gap(detected_gap_t gap[], int gap_count, float deg){
-     int i;
-     for (i = 0; i < gap_count; i++){
+int select_gap(detected_gap_t gaps[], int gap_count, float target_angle)
+{
+    int i;
+    int best_idx = -1;
+    float best_delta = 9999.0f;
 
-        if(gap[i].viable==1){
-         if(abs(deg-gap[i].gap_start_angle)>abs(deg-gap[i].gap_end_angle)){
-             gap[i].deg_from_goal= abs(deg-gap[i].gap_end_angle);
-
-         }
-         else{
-             gap[i].deg_from_goal= abs(deg-gap[i].gap_start_angle);
-         }
-
-
-
-        }
-      }
-     int z=9;
-     gap[z].deg_from_goal=180;
-     for (i = 0; i < gap_count; i++){
-         if(gap[i].viable==1){
-
-           if(gap[z].deg_from_goal>=gap[i].deg_from_goal){
-           z=i;
-
-
-
-
-           }}
-         }
-    if(gap[z].lin_gap_between_obj>=45){
-
-
-
-        if(abs(deg-gap[z].gap_start_angle)>abs(deg-gap[z].gap_end_angle)){
-
-            float angbob=35/gap[z].dist;
-                angbob=angbob*180/M_PI;
-            gap[z].chosen_movement_angle=(float)gap[z].gap_end_angle-angbob;
-            return z;
-        }
-        else{
-            float angbob=35/gap[z].dist;
-            angbob=angbob*180/M_PI;
-                     gap[z].chosen_movement_angle=(float)gap[z].gap_start_angle+angbob;
-            return z;
-
-        }
-
-    }
-    else{
-        gap[z].chosen_movement_angle=(float)(gap[z].gap_start_angle+gap[z].gap_end_angle)/2;
-  return z;
-
+    if (gap_count <= 0)
+    {
+        return -1;
     }
 
- }
+    for (i = 0; i < gap_count; i++)
+    {
+        float chosen_angle;
 
+        if (gaps[i].viable == 0)
+        {
+            continue;
+        }
 
+        if (gaps[i].lin_gap_between_obj >= 45.0f && gaps[i].dist > 0.0f)
+        {
+            float angbob = 35.0f / gaps[i].dist;
+            angbob = angbob * 180.0f / (float)M_PI;
 
+            if (fabsf(target_angle - gaps[i].gap_start_angle)
+                > fabsf(target_angle - gaps[i].gap_end_angle))
+            {
+                chosen_angle = (float)gaps[i].gap_end_angle - angbob;
+            }
+            else
+            {
+                chosen_angle = (float)gaps[i].gap_start_angle + angbob;
+            }
+        }
+        else
+        {
+            chosen_angle = ((float)gaps[i].gap_start_angle
+                           + (float)gaps[i].gap_end_angle) / 2.0f;
+        }
 
-int gap_measurment(detected_obj_t objects[], int obj_count, detected_gap_t gap[]){
-int k=0;
-int i=0;
-int gapbeforeobj;
-int gapafterobj;
-if(obj_count==0){
-   for(i=0; i==9; i++){
-       gap[i].gap_start_angle=0;
-       gap[i].gap_end_angle=0;
-       gap[i].lin_gap_between_obj=0;
-       gap[i].deg_from_goal=0;
-       gap[i].viable=0;
-       gap[i].chosen_movement_angle=0;
-   }
-    return 0;
+        gaps[i].chosen_movement_angle = chosen_angle;
+        gaps[i].deg_from_goal = fabsf(chosen_angle - target_angle);
+
+        if (gaps[i].deg_from_goal < best_delta)
+        {
+            best_delta = gaps[i].deg_from_goal;
+            best_idx = i;
+        }
+    }
+
+    return best_idx;
 }
 
-/* if there is a gap before any objects are dectected*/
-   if(objects[0].start_angle!=0){
-       gap[k].gap_start_angle=0;
-       gapbeforeobj=1;
-
-
-      gap[k].gap_end_angle=objects[0].start_angle;
-
-       gap[k].lin_gap_between_obj = objects[0].ping_dist*((gap[k].gap_end_angle)* M_PI / 180);
-               k++;
-   }
-/*verything above this is good*/
-
-for(i=1; i<obj_count; i++){
-
-
-       gap[k].gap_start_angle=objects[i-1].end_angle;
-       gap[k].gap_end_angle=objects[i].start_angle;
 
 
 
-    k++;
-    if((i==obj_count-1)&&(objects[i].end_angle!=180)){
-        gapafterobj=1;
-               gap[k].gap_start_angle=objects[i].end_angle;
-                      gap[k].gap_end_angle=180;
-                      k++;
-           }
+int gap_measurment(detected_obj_t objects[], int obj_count, detected_gap_t gaps[])
+{
+    int k = 0;
+    int i = 0;
 
-}
-for(i=0; i<=k; i++){
+    if (obj_count == 0)
+    {
+        for (i = 0; i < MAX_GAPS; i++)
+        {
+            gaps[i].gap_start_angle = 0;
+            gaps[i].gap_end_angle = 0;
+            gaps[i].lin_gap_between_obj = 0.0f;
+            gaps[i].deg_from_goal = 0.0f;
+            gaps[i].viable = 0;
+            gaps[i].chosen_movement_angle = 0.0f;
+            gaps[i].dist = 0.0f;
+        }
+        return 0;
+    }
 
+    if (objects[0].start_angle != 0 && k < MAX_GAPS)
+    {
+        gaps[k].gap_start_angle = 0;
+        gaps[k].gap_end_angle = objects[0].start_angle;
+        gaps[k].dist = objects[0].ping_dist;
+        gaps[k].lin_gap_between_obj = gaps[k].dist
+                                    * ((float)(gaps[k].gap_end_angle
+                                    - gaps[k].gap_start_angle) * (float)M_PI / 180.0f);
+        gaps[k].deg_from_goal = 0.0f;
+        gaps[k].viable = 0;
+        gaps[k].chosen_movement_angle = 0.0f;
+        k++;
+    }
 
+    for (i = 1; i < obj_count && k < MAX_GAPS; i++)
+    {
+        float left = objects[i - 1].ping_dist;
+        float right = objects[i].ping_dist;
+        float dist = (left < right) ? left : right;
 
-if(objects[i].ping_dist>objects[i-1].ping_dist){
+        gaps[k].gap_start_angle = objects[i - 1].end_angle;
+        gaps[k].gap_end_angle = objects[i].start_angle;
+        gaps[k].dist = dist;
+        gaps[k].lin_gap_between_obj = dist
+                                    * ((float)(gaps[k].gap_end_angle
+                                    - gaps[k].gap_start_angle) * (float)M_PI / 180.0f);
+        gaps[k].deg_from_goal = 0.0f;
+        gaps[k].viable = 0;
+        gaps[k].chosen_movement_angle = 0.0f;
+        k++;
+    }
 
-           gap[i].lin_gap_between_obj = objects[i-1].ping_dist*((float)(gap[i].gap_end_angle-gap[i].gap_start_angle)* M_PI / 180);
-           gap[i].dist=objects[i-1].ping_dist;
+    if (objects[obj_count - 1].end_angle != 180 && k < MAX_GAPS)
+    {
+        gaps[k].gap_start_angle = objects[obj_count - 1].end_angle;
+        gaps[k].gap_end_angle = 180;
+        gaps[k].dist = objects[obj_count - 1].ping_dist;
+        gaps[k].lin_gap_between_obj = gaps[k].dist
+                                    * ((float)(gaps[k].gap_end_angle
+                                    - gaps[k].gap_start_angle) * (float)M_PI / 180.0f);
+        gaps[k].deg_from_goal = 0.0f;
+        gaps[k].viable = 0;
+        gaps[k].chosen_movement_angle = 0.0f;
+        k++;
+    }
 
-       }
-       else {
-           gap[i].lin_gap_between_obj = objects[i].ping_dist*((float)(gap[i].gap_end_angle-gap[i].gap_start_angle)* M_PI / 180);
-           gap[i].dist=objects[i].ping_dist;
+    {
+        char line[120];
 
-       }
-if((i==0)&&(gapbeforeobj==1)){
+        uart_sendStr("\r\n======================== Detected Gaps =========================\r\n");
+        sprintf(line, "Gap#   start angle:   end angle:   gap width:   viable:\r\n");
+        uart_sendStr(line);
+        uart_sendStr("----  ----------  ----------  ------------  ------------  --------\r\n");
 
-           gap[i].lin_gap_between_obj = objects[0].ping_dist*((float)(gap[i].gap_end_angle-gap[i].gap_start_angle)* M_PI / 180);
-           gap[i].dist=objects[0].ping_dist;
+        for (i = 0; i < k; i++)
+        {
+            sprintf(line, "%d    %d     %d     %f \r\n",
+                    i + 1,
+                    gaps[i].gap_start_angle,
+                    gaps[i].gap_end_angle,
+                    gaps[i].lin_gap_between_obj);
+            uart_sendStr(line);
+        }
+    }
 
-       }
-if((i==k-1)&&(gapafterobj==1)){
-
-           gap[i].lin_gap_between_obj = objects[obj_count-1].ping_dist*((float)(gap[i].gap_end_angle-gap[i].gap_start_angle)* M_PI / 180);
-           gap[i].dist=objects[obj_count-1].ping_dist;
-
-       }
-}
-char line[120];
-
-
-   uart_sendStr("\r\n======================== Detected Gaps =========================\r\n");
-   sprintf(line, "Gap#   start angle:   end angle:   gap width:   viable:\r\n");
-   uart_sendStr(line);
-   uart_sendStr("----  ----------  ----------  ------------  ------------  --------\r\n");
-
-   for (i = 0; i < k; i++)
-   {
-       sprintf(line, "%d    %d     %d     %f \r\n",
-               i + 1,
-               gap[i].gap_start_angle,
-               gap[i].gap_end_angle,
-               gap[i].lin_gap_between_obj);
-       uart_sendStr(line);
-   }
-return k;
+    return k;
 }

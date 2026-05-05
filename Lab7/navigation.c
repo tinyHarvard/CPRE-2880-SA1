@@ -63,6 +63,11 @@ void move_lateral(oi_t *sensor_data, double distance_mm) {
     while (distance_sum < distance_mm)
     {
         oi_update(sensor_data);
+        if (command_flag)
+        {
+            oi_setWheels(0, 0);
+            return;
+        }
         distance_sum += sensor_data->distance;
     }
 
@@ -105,6 +110,20 @@ static void turn_to_face(oi_t *sensor_data, float target_angle)
     {
         uart_sendStr("  Target is straight ahead.\r\n");
     }
+}
+
+static int nav_abort_requested(oi_t *sensor_data)
+{
+    if (command_flag)
+    {
+        command_flag = 0;
+        last_char_received = 0;
+        oi_setWheels(0, 0);
+        uart_sendStr("\r\n[Auto] Abort requested. Returning to menu.\r\n");
+        return 1;
+    }
+
+    return 0;
 }
 
 /**
@@ -184,47 +203,85 @@ void nav_bump_avoidance(oi_t *sensor_data, int hit_right, int hit_left)
  *
  * @param sensor_data  Pointer to oi_t struct (already initialized)
  */
-void nav_auto_drive(oi_t *sensor_data, float cm, float deg)
+void nav_auto_drive(oi_t *sensor_data, float target_cm, float target_deg)
 {
     detected_obj_t objects[MAX_OBJECTS];
-while(cm>10){
-    int obj_count;
-    char msg[120];
-    sprintf(msg, "\r\nTarget at cm: %f deg: %f \r\n",
-                cm, deg);
-        uart_sendStr(msg);
+    while (1)
+    {
+        int obj_count;
+        int gap_count;
+        int chosen_gap;
+        detected_gap_t gaps[MAX_GAPS];
 
+        if (nav_abort_requested(sensor_data))
+        {
+            return;
+        }
 
-        /* ---- TURN: Face the target ------------------------------------------ */
-        turn_to_face(sensor_data, deg);
-        deg=90;
+        uart_sendStr("\r\n=== AUTONOMOUS MODE: Scanning... ===\r\n");
+        lcd_clear();
+        lcd_printf("Auto: Scanning...");
 
-    /* ---- SCAN: Find all objects and pick the viable gaps -------------------- */
-    uart_sendStr("\r\n=== AUTONOMOUS MODE: Scanning... ===\r\n");
-    lcd_clear();
-    lcd_printf("Auto: Scanning...");
+        obj_count = scan_objects(objects, MAX_OBJECTS);
+        print_object_table(objects, obj_count);
 
-    obj_count = scan_objects(objects, MAX_OBJECTS);
-    print_object_table(objects, obj_count);
+        if (target_cm <= TARGET_PROXIMITY_CM)
+        {
+            uart_sendStr("\r\nArrived within 10 cm of target.\r\n");
+            return;
+        }
 
-    detected_gap_t gap[9];
+        gap_count = gap_measurment(objects, obj_count, gaps);
+        print_gap_table(gaps, gap_count);
 
- int gap_count= gap_measurment(objects, obj_count, gap);
-     print_gap_table(gap, gap_count);
+        chosen_gap = select_gap(gaps, gap_count, target_deg);
+        if (chosen_gap < 0)
+        {
+            uart_sendStr("\r\nNo viable gap found.\r\n");
+            return;
+        }
 
-     /* ---- select_gap -------------------- */
-     int indexchosengap=select_gap(gap, gap_count, deg);
-     char line[120];
-           sprintf(line, "chosen gap: %d Angle: %f   \r\n",
-                   indexchosengap+1,gap[indexchosengap].chosen_movement_angle );
-                uart_sendStr(line);
-     turn_to_face(sensor_data,gap[indexchosengap].chosen_movement_angle);
-     move_lateral(sensor_data, 800);
+        {
+            char line[120];
+            sprintf(line, "chosen gap: %d Angle: %f\r\n",
+                    chosen_gap + 1,
+                    gaps[chosen_gap].chosen_movement_angle);
+            uart_sendStr(line);
+        }
 
-cm=cm-50;
+        turn_to_face(sensor_data, gaps[chosen_gap].chosen_movement_angle);
+        if (nav_abort_requested(sensor_data))
+        {
+            return;
+        }
 
+        /* Capture actual mm traveled so target_cm reflects reality if the
+         * bot bumped early or got aborted partway. */
+        double dist_traveled_mm = move_forward(sensor_data, AUTO_DRIVE_STEP_MM);
+        if (nav_abort_requested(sensor_data))
+        {
+            return;
+        }
 
-}
+        target_cm -= (float)(dist_traveled_mm / 10.0);
+        if (target_cm < 0.0f)
+        {
+            target_cm = 0.0f;
+        }
+
+        /* Highest priority: cliff/boundary. Override bump check if both. */
+        if (boundrydetection(sensor_data))
+        {
+            continue;
+        }
+
+        if (sensor_data->bumpLeft || sensor_data->bumpRight)
+        {
+            nav_bump_avoidance(sensor_data,
+                               sensor_data->bumpRight,
+                               sensor_data->bumpLeft);
+        }
+    }
 }
 
 /**
@@ -259,7 +316,14 @@ char nav_manual_mode(oi_t *sensor_data)
 
     while (1)
     {
-        received = uart_receive();
+        if (last_char_received == 0)
+        {
+            timer_waitMillis(1);
+            continue;
+        }
+
+        received = last_char_received;
+        last_char_received = 0;
 
         switch (received)
         {
@@ -347,17 +411,33 @@ char nav_manual_mode(oi_t *sensor_data)
         }
     }
 }
-void boundrydetection(oi_t *sensor_data, detected_obj_t objects[MAX_OBJECTS], int smallest_idx ) {
-    if(2500<=(sensor_data->cliffFrontLeftSignal || sensor_data->cliffFrontRightSignal || sensor_data->cliffLeftSignal || sensor_data->cliffRightSignal)){
-        turn_to_face(sensor_data, objects[smallest_idx].center_angle-180);
-        move_backward(sensor_data, BACKUP_DIST_MM);
+int boundrydetection(oi_t *sensor_data)
+{
+    int on_tape  = (sensor_data->cliffFrontLeftSignal  >= 2500)
+                || (sensor_data->cliffFrontRightSignal >= 2500)
+                || (sensor_data->cliffLeftSignal       >= 2500)
+                || (sensor_data->cliffRightSignal      >= 2500);
 
+    int off_floor = (sensor_data->cliffFrontLeftSignal  <= 500)
+                 || (sensor_data->cliffFrontRightSignal <= 500)
+                 || (sensor_data->cliffLeftSignal       <= 500)
+                 || (sensor_data->cliffRightSignal      <= 500);
+
+    if (!on_tape && !off_floor)
+    {
+        return 0;
     }
-    if(500>=(sensor_data->cliffFrontLeftSignal || sensor_data->cliffFrontRightSignal || sensor_data->cliffLeftSignal || sensor_data->cliffRightSignal)){
-           turn_to_face(sensor_data, objects[smallest_idx].center_angle-180);
-           move_backward(sensor_data, BACKUP_DIST_MM);
 
-       }
+    /* Highest-priority response per project spec: stop, back up, U-turn.
+     * We do NOT call turn_to_face here because the gap-based loop has no
+     * "smallest object" reference — escape direction is just "behind us". */
+    oi_setWheels(0, 0);
+    uart_sendStr("\r\n[CLIFF] Boundary detected — backing up and turning around.\r\n");
+    lcd_clear();
+    lcd_printf("Boundary!\nEscape...");
 
-        return;
+    move_backward(sensor_data, BACKUP_DIST_MM);
+    turn_left(sensor_data, 180.0);
+
+    return 1;
 }

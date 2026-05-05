@@ -23,6 +23,8 @@
 
 /* Maximum number of objects the scan can track at once */
 #define MAX_OBJECTS     10
+/* Up to MAX_OBJECTS+1 gaps are possible: 1 leading + (N-1) between + 1 trailing */
+#define MAX_GAPS        (MAX_OBJECTS + 1)
 
 /**
  * detected_obj_t - Holds all measured properties of a single detected object

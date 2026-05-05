@@ -20,6 +20,7 @@
 
 #include "open_interface.h"
 #include "movement.h"
+#include "uart.h"
 
 /* Motor speeds in mm/s — max is 500 per OI spec */
 #define DRIVE_SPEED     200   /* Moderate speed for controlled movement */
@@ -45,6 +46,11 @@ double move_forward(oi_t *sensor_data, double distance_mm)
     while (distance_sum < distance_mm)
     {
         oi_update(sensor_data);
+        if (command_flag)
+        {
+            oi_setWheels(0, 0);
+            return distance_sum;
+        }
         distance_sum += sensor_data->distance;
 
         if (sensor_data->bumpLeft || sensor_data->bumpRight)
@@ -75,6 +81,11 @@ void move_backward(oi_t *sensor_data, double distance_mm)
     while (distance_sum < distance_mm)
     {
         oi_update(sensor_data);
+        if (command_flag)
+        {
+            oi_setWheels(0, 0);
+            return;
+        }
         distance_sum -= sensor_data->distance; /* distance is negative in reverse */
     }
 
@@ -99,6 +110,11 @@ void turn_right(oi_t *sensor_data, double degrees)
     while (angle_sum < degrees)
     {
         oi_update(sensor_data);
+        if (command_flag)
+        {
+            oi_setWheels(0, 0);
+            return;
+        }
         angle_sum -= sensor_data->angle; /* negate clockwise (negative) angle */
     }
 
@@ -123,6 +139,11 @@ void turn_left(oi_t *sensor_data, double degrees)
     while (angle_sum < degrees)
     {
         oi_update(sensor_data);
+        if (command_flag)
+        {
+            oi_setWheels(0, 0);
+            return;
+        }
         angle_sum += sensor_data->angle;
     }
 

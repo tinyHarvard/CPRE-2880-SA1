@@ -23,7 +23,12 @@
 
 #include <inc/tm4c123gh6pm.h>
 #include <stdint.h>
+#include "driverlib/interrupt.h"
 #include "uart.h"
+
+volatile char command_byte = 0;
+volatile int command_flag = 0;
+volatile char last_char_received = 0;
 
 /**
  * uart_init - Complete UART1 initialization
@@ -92,6 +97,33 @@ void uart_init(void)
      *   bit 0 = UARTEN, bit 8 = TXE, bit 9 = RXE
      *   0x301 = 0b 0011 0000 0001                                       */
     UART1_CTL_R |= 0x301;
+}
+
+/**
+ * uart_interrupt_init - UART1 initialization with RX interrupt support
+ *
+ * Uses uart_init() for base configuration, then enables RX interrupts
+ * in UART1 and NVIC, and registers UART1_Handler.
+ */
+void uart_interrupt_init(void)
+{
+    uart_init();
+
+    /* Clear any stale RX interrupt flag */
+    UART1_ICR_R |= 0x10;
+
+    /* Enable RX interrupt mask */
+    UART1_IM_R |= 0x10;
+
+    /* Set UART1 interrupt priority to 1 (bits 23:21 of PRI1 for IRQ 6) */
+    NVIC_PRI1_R = (NVIC_PRI1_R & 0xFF0FFFFF) | 0x00200000;
+
+    /* Enable UART1 interrupt in NVIC (IRQ #6) */
+    NVIC_EN0_R |= (1 << 6);
+
+    /* Register ISR and enable global interrupts */
+    IntRegister(INT_UART1, UART1_Handler);
+    IntMasterEnable();
 }
 
 /**
@@ -179,5 +211,34 @@ void uart_sendStr(const char *data)
     {
         uart_sendChar(*data);
         data++;
+    }
+}
+
+/**
+ * UART1_Handler - RX interrupt service routine
+ */
+void UART1_Handler(void)
+{
+    char byte_received;
+
+    if (UART1_MIS_R & 0x10)
+    {
+        UART1_ICR_R |= 0x10;
+
+        byte_received = (char)(UART1_DR_R & 0xFF);
+
+        uart_sendChar(byte_received);
+        if (byte_received == '\r')
+        {
+            uart_sendChar('\n');
+        }
+        else
+        {
+            last_char_received = byte_received;
+            if (byte_received == command_byte)
+            {
+                command_flag = 1;
+            }
+        }
     }
 }
