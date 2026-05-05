@@ -61,22 +61,6 @@
 #endif
 
 /**
- * average_ir_reading - Take multiple IR readings at one angle and average
- *
- * Calls cyBOT_Scan() NUM_SAMPLES times at the given angle, summing the
- * IR distance values and returning the average. This is like taking the
- * temperature 5 times and averaging � any single bad reading gets diluted.
- *
- * Note: We only use the IR distance (scan_data.IR_raw_val is the raw ADC
- * value, but cyBOT_Scan already converts it to sound_dist and IR_raw_val).
- * The cyBOT_Scan_t struct stores IR distance in the IR_raw_val field as a
- * raw ADC count. We use sound_dist for PING and IR_raw_val for IR.
- *
- * @param angle      Servo angle in degrees (0-180)
- * @param ping_out   Pointer to store the last PING reading (cm), or NULL
- * @return           Averaged IR raw ADC value at this angle
- */
-/**
  * scan_init - One-shot initializer for servo + PING + IR.
  *
  * Replaces cyBOT_init_Scan(0b0111) from the old library. Call this once at
