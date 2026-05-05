@@ -11,8 +11,8 @@ void setup() {
 
   BLE.scan(true);  // accept duplicates for continuous updates
 
-  Serial.println("# Single RX listening for TX_0, TX_1, TX_2");
-  Serial.println("tx_id,seq,tx_ts_ms,rx_ts_ms,rssi,tx_power");
+  // Serial.println("# Single RX listening for TX_0, TX_1, TX_2");
+  // Serial.println("tx_id,seq,tx_ts_ms,rx_ts_ms,rssi,tx_power");
 }
 
 void loop() {
