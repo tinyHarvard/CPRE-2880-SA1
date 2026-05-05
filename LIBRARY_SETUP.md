@@ -67,11 +67,43 @@ All projects need the TivaWare SDK include path set before they will compile.
    - Adjust the version number to match what you have installed
 5. Click **OK** → **Apply and Close**
 
+Keep this path consistent on the Windows computer when possible. This repository assumes:
+
+```text
+C:\ti\TivaWare_C_Series-2.2.0.295
+```
+
+If TivaWare is installed somewhere else, update the path in CCS after import instead of committing machine-specific workspace metadata.
+
+---
+
+## Importing Projects in CCS
+
+For the cleanest import on Windows with Code Composer Studio 12.7.1:
+
+1. Pull the latest repository changes from GitHub, or download the repository zip and extract it.
+2. Open Code Composer Studio with a fresh workspace directory outside this repository.
+3. Choose **File → Import → Code Composer Studio → CCS Projects**.
+4. Select the specific lab folder, such as `Lab7`, `IMU`, or `LABs_f_d`, rather than selecting the whole repository as one project.
+5. Leave generated workspace metadata out of Git.
+
+If you downloaded a zip from GitHub, the extracted folder may be named like `CPRE-2880-SA1-ping-ir`. Point CCS at a project folder inside it:
+
+```text
+CPRE-2880-SA1-ping-ir\Lab7
+CPRE-2880-SA1-ping-ir\IMU
+CPRE-2880-SA1-ping-ir\LABs_f_d
+```
+
+Avoid importing the outer extracted folder as a CCS project.
+
+The files `.project`, `.cproject`, `.ccsproject`, `targetConfigs/`, source files, headers, `.cmd` linker files, and required `.lib` files are the project files that should travel through Git.
+
 ---
 
 ## Also Required: Linker Command File
 
-Each project needs a linker command file (`tm4c123gh6pm.cmd`) that tells the linker how to lay out code in the TM4C123's Flash and SRAM. This file is **not included** in the project folders — set it up in CCS after importing.
+Each project needs a linker command file (`tm4c123gh6pm.cmd`) that tells the linker how to lay out code in the TM4C123's Flash and SRAM.
 
 **Option A — Use the TivaWare copy (recommended):**
 
