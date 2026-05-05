@@ -1,51 +1,58 @@
 #include <ArduinoBLE.h>
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial);
+    Serial.begin(115200);
+    while (!Serial);
 
-  if (!BLE.begin()) {
-    Serial.println("ERR:BLE_INIT");
-    while (1);
-  }
+    if (!BLE.begin()) {
+        Serial.println("ERR:BLE_INIT");
+        while (1);
+    }
 
-  BLE.scan(true);  // accept duplicates for continuous updates
+    // Fix 1: continuous scanning — interval = window = no gaps
+    BLE.setScanInterval(50);
+    BLE.setScanWindow(50);
 
-  // Serial.println("# Single RX listening for TX_0, TX_1, TX_2");
-  // Serial.println("tx_id,seq,tx_ts_ms,rx_ts_ms,rssi,tx_power");
+    BLE.scan(true);   // true = accept duplicates
+    Serial.println("# RX ready");
 }
 
 void loop() {
-  BLEDevice peripheral = BLE.available();
-  if (!peripheral) return;
+    // Fix 4: restart scan every 500ms to reset duplicate filtering
+    static unsigned long last_restart = 0;
+    if (millis() - last_restart > 500) {
+        BLE.stopScan();
+        BLE.setScanInterval(50);
+        BLE.setScanWindow(50);
+        BLE.scan(true);
+        last_restart = millis();
+    }
 
-  // Accept any of our 3 TX beacons by name prefix
-  String name = peripheral.localName();
-  if (!name.startsWith("BLE_TX_")) return;
+    BLEDevice dev = BLE.available();
+    if (!dev) return;
 
-  uint8_t mfr[32];
-  int mfrLen = peripheral.manufacturerData(mfr, sizeof(mfr));
+    String name = dev.localName();
+    if (!name.startsWith("BLE_TX_")) return;
 
-  // Need 11 bytes and correct type tag
-  if (mfrLen < 11 || mfr[2] != 0xA1) return;
+    uint8_t mfr[20];
+    int mfr_len = dev.manufacturerData(mfr, sizeof(mfr));
+    if (mfr_len < 11) return;
+    if (mfr[2] != 0xA1) return;
 
-  uint8_t  txId    = mfr[3];
-  uint32_t txTs    = ((uint32_t)mfr[4])
-                   | ((uint32_t)mfr[5] <<  8)
-                   | ((uint32_t)mfr[6] << 16)
-                   | ((uint32_t)mfr[7] << 24);
-  int8_t   txPower = (int8_t)mfr[8];
-  uint16_t seq     = (uint16_t)mfr[9] | ((uint16_t)mfr[10] << 8);
-  uint32_t rxTs    = millis();
-  int      rssi    = peripheral.rssi();
+    int      tx_id    = mfr[3];
+    uint32_t tx_ts    = mfr[4] | ((uint32_t)mfr[5]<<8)
+                               | ((uint32_t)mfr[6]<<16)
+                               | ((uint32_t)mfr[7]<<24);
+    int8_t   tx_power = (int8_t)mfr[8];
+    uint16_t seq      = mfr[9] | ((uint16_t)mfr[10]<<8);
+    int      rssi     = dev.rssi();
+    uint32_t rx_ts    = millis();
 
-  // Guard: only accept known TX IDs
-  if (txId > 2) return;
-
-  Serial.print(txId);    Serial.print(",");
-  Serial.print(seq);     Serial.print(",");
-  Serial.print(txTs);    Serial.print(",");
-  Serial.print(rxTs);    Serial.print(",");
-  Serial.print(rssi);    Serial.print(",");
-  Serial.println(txPower);
+    // CSV: tx_id,seq,tx_ts,rx_ts,rssi,tx_power
+    Serial.print(tx_id);    Serial.print(",");
+    Serial.print(seq);      Serial.print(",");
+    Serial.print(tx_ts);    Serial.print(",");
+    Serial.print(rx_ts);    Serial.print(",");
+    Serial.print(rssi);     Serial.print(",");
+    Serial.println(tx_power);
 }
