@@ -43,6 +43,15 @@ typedef struct {
     float  linear_width;    /* actual physical width in cm                 */
 } detected_obj_t;
 
+typedef struct {
+      float  lin_gap_between_obj; /* gap between objects in cm, measured from closest object */
+      int  gap_start_angle;     /* begining of gap angle */
+      int  gap_end_angle;       /* end of gap angle */
+      float  chosen_movement_angle;  /* angle cybot should move */
+      float  deg_from_goal;
+      int viable;
+      float dist;
+} detected_gap_t;
 /**
  * scan_objects - Perform a full 0-180 degree scan using IR edge detection
  *   and PING distance measurement, then compute linear widths
@@ -61,6 +70,12 @@ typedef struct {
  * @return           Number of objects actually detected (0 to max_count)
  */
 int scan_objects(detected_obj_t objects[], int max_count);
+/* calibrates the servo on the cybot*/
+void calibrate_servo(void);
+/* measures the gaps between objects*/
+int gap_measurment(detected_obj_t objects[], int obj_count, detected_gap_t gap[]);
+
+
 
 /**
  * find_smallest_linear - Find the object with the smallest linear width
@@ -85,6 +100,14 @@ int find_smallest_linear(detected_obj_t objects[], int obj_count);
  * @param objects    Array of detected objects
  * @param obj_count  Number of objects to print
  */
+
+
 void print_object_table(detected_obj_t objects[], int obj_count);
+/* prints a formatted gap table in to putty*/
+void print_gap_table(detected_gap_t gaps[], int gap_count);
+/* finds out if the cybot can make it through the hole*/
+int find_viable_angles(detected_gap_t gaps[], int gap_count);
+/* selects which gap the cybot is going to drive through*/
+int select_gap(detected_gap_t gap[], int gap_count, float deg);
 
 #endif /* SCAN_H_ */

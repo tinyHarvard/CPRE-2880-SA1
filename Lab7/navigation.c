@@ -36,12 +36,12 @@
 #include <stdio.h>
 
 /* ---- Navigation tuning constants ---------------------------------------- */
-#define DRIVE_SPEED         200     /* mm/s for lateral avoidance moves       */
+#define DRIVE_SPEED         100     /* mm/s for lateral avoidance moves       */
 #define BACKUP_DIST_MM      150.0   /* mm to back up after a bump             */
 #define LATERAL_DIST_MM     250.0   /* mm to sidestep around obstacle         */
-#define TURN_ANGLE_DEG      86.0    /* calibrated 90° turn (Lab 2 value)      */
-#define TARGET_PROXIMITY_CM 10.0    /* stop when this close to target (cm)    */
-#define AUTO_DRIVE_STEP_MM  100.0   /* mm per forward increment in auto mode  */
+#define TURN_ANGLE_DEG      80.0    /* calibrated 90° turn (Lab 2 value)      */
+#define TARGET_PROXIMITY_CM 15    /* stop when this close to target (cm)    */
+#define AUTO_DRIVE_STEP_MM  50.0   /* mm per forward increment in auto mode  */
 #define MANUAL_DRIVE_DIST   100.0   /* mm per 'w'/'s' keypress               */
 #define MANUAL_TURN_DEG     15.0    /* degrees per 'a'/'d' keypress           */
 
@@ -55,8 +55,7 @@
  * @param sensor_data  Pointer to oi_t struct
  * @param distance_mm  Distance to drive forward in mm
  */
-static void move_lateral(oi_t *sensor_data, double distance_mm)
-{
+void move_lateral(oi_t *sensor_data, double distance_mm) {
     double distance_sum = 0.0;
 
     oi_setWheels(DRIVE_SPEED, DRIVE_SPEED);
@@ -141,26 +140,26 @@ void nav_bump_avoidance(oi_t *sensor_data, int hit_right, int hit_left)
     move_backward(sensor_data, BACKUP_DIST_MM);
 
     /* Step 2: Turn away from the bump side */
-    if (hit_right)
-    {
-        turn_left(sensor_data, TURN_ANGLE_DEG);
+    if (hit_left)
+    { turn_right(sensor_data, TURN_ANGLE_DEG);
+
     }
     else
-    {
-        turn_right(sensor_data, TURN_ANGLE_DEG);
+    {     turn_left(sensor_data, TURN_ANGLE_DEG);
+
     }
 
     /* Step 3: Sidestep laterally to get around the obstacle */
-    move_lateral(sensor_data, LATERAL_DIST_MM);
+    move_lateral(sensor_data, 800);
 
     /* Step 4: Turn back toward original heading */
-    if (hit_right)
-    {
-        turn_right(sensor_data, TURN_ANGLE_DEG);
+    if (hit_left)
+    {turn_left(sensor_data, TURN_ANGLE_DEG);
+
     }
     else
     {
-        turn_left(sensor_data, TURN_ANGLE_DEG);
+        turn_right(sensor_data, TURN_ANGLE_DEG);
     }
 
     /* Clear stale sensor data after all the movement */
@@ -185,135 +184,47 @@ void nav_bump_avoidance(oi_t *sensor_data, int hit_right, int hit_left)
  *
  * @param sensor_data  Pointer to oi_t struct (already initialized)
  */
-void nav_auto_drive(oi_t *sensor_data)
+void nav_auto_drive(oi_t *sensor_data, float cm, float deg)
 {
     detected_obj_t objects[MAX_OBJECTS];
+while(cm>10){
     int obj_count;
-    int smallest_idx;
-    double remaining_mm;
-    double total_driven = 0.0;
-    double dist_traveled;
-    double step;
     char msg[120];
-    char check;
+    sprintf(msg, "\r\nTarget at cm: %f deg: %f \r\n",
+                cm, deg);
+        uart_sendStr(msg);
 
-    /* ---- SCAN: Find all objects and pick the smallest -------------------- */
+
+        /* ---- TURN: Face the target ------------------------------------------ */
+        turn_to_face(sensor_data, deg);
+        deg=90;
+
+    /* ---- SCAN: Find all objects and pick the viable gaps -------------------- */
     uart_sendStr("\r\n=== AUTONOMOUS MODE: Scanning... ===\r\n");
     lcd_clear();
     lcd_printf("Auto: Scanning...");
 
     obj_count = scan_objects(objects, MAX_OBJECTS);
     print_object_table(objects, obj_count);
-    smallest_idx = find_smallest_linear(objects, obj_count);
 
-    if (smallest_idx < 0)
-    {
-        uart_sendStr("\r\nNo objects found. Cannot navigate.\r\n");
-        uart_sendStr("Try 't' for manual mode or 'm' to re-scan.\r\n");
-        lcd_clear();
-        lcd_printf("No objects found");
-        return;
-    }
+    detected_gap_t gap[9];
 
-    sprintf(msg, "\r\nTarget: Object #%d at %.1f deg, %.1f cm away "
-                 "(linear width: %.1f cm)\r\n",
-            smallest_idx + 1,
-            objects[smallest_idx].center_angle,
-            objects[smallest_idx].ping_dist,
-            objects[smallest_idx].linear_width);
-    uart_sendStr(msg);
+ int gap_count= gap_measurment(objects, obj_count, gap);
+     print_gap_table(gap, gap_count);
 
-    /* ---- TURN: Face the target ------------------------------------------ */
-    turn_to_face(sensor_data, objects[smallest_idx].center_angle);
+     /* ---- select_gap -------------------- */
+     int indexchosengap=select_gap(gap, gap_count, deg);
+     char line[120];
+           sprintf(line, "chosen gap: %d Angle: %f   \r\n",
+                   indexchosengap+1,gap[indexchosengap].chosen_movement_angle );
+                uart_sendStr(line);
+     turn_to_face(sensor_data,gap[indexchosengap].chosen_movement_angle);
+     move_lateral(sensor_data, 800);
 
-    /* ---- DRIVE: Move toward target in steps ----------------------------- */
-    remaining_mm = (objects[smallest_idx].ping_dist - TARGET_PROXIMITY_CM) * 10.0;
+cm=cm-50;
 
-    if (remaining_mm <= 0)
-    {
-        uart_sendStr("\r\n*** Already within 10 cm! TARGET REACHED! ***\r\n");
-        lcd_clear();
-        lcd_printf("TARGET REACHED!\n<= 10 cm");
-        return;
-    }
 
-    lcd_clear();
-    lcd_printf("Auto: Driving...\n%.0f mm to go", remaining_mm);
-
-    while (remaining_mm > 0)
-    {
-        /* Check for user input between steps (non-blocking) */
-        check = uart_receive_nonblocking();
-        if (check == 't' || check == 'q')
-        {
-            oi_setWheels(0, 0);
-            sprintf(msg, "\r\nAuto-drive interrupted by '%c' key.\r\n", check);
-            uart_sendStr(msg);
-            return;
-        }
-
-        /* Drive one step toward target */
-        step = (remaining_mm > AUTO_DRIVE_STEP_MM)
-               ? AUTO_DRIVE_STEP_MM : remaining_mm;
-        dist_traveled  = move_forward(sensor_data, step);
-        total_driven  += dist_traveled;
-        remaining_mm  -= dist_traveled;
-
-        /* Check bump sensors — cache flags before any other oi_update */
-        if (sensor_data->bumpLeft || sensor_data->bumpRight)
-        {
-            int bump_r = sensor_data->bumpRight;
-            int bump_l = sensor_data->bumpLeft;
-
-            nav_bump_avoidance(sensor_data, bump_r, bump_l);
-
-            /* ---- RE-SCAN: Relocate target after avoidance --------------- */
-            uart_sendStr("  Re-scanning after avoidance...\r\n");
-            lcd_clear();
-            lcd_printf("Re-scanning...");
-
-            obj_count = scan_objects(objects, MAX_OBJECTS);
-            print_object_table(objects, obj_count);
-            smallest_idx = find_smallest_linear(objects, obj_count);
-
-            if (smallest_idx < 0)
-            {
-                uart_sendStr("  Lost target after avoidance!\r\n");
-                uart_sendStr("  Press 't' for manual or wait for next scan.\r\n");
-                lcd_clear();
-                lcd_printf("Target lost!");
-                return;
-            }
-
-            /* Re-orient toward the re-detected target */
-            sprintf(msg, "  Re-acquired: #%d at %.1f deg, %.1f cm\r\n",
-                    smallest_idx + 1,
-                    objects[smallest_idx].center_angle,
-                    objects[smallest_idx].ping_dist);
-            uart_sendStr(msg);
-
-            turn_to_face(sensor_data, objects[smallest_idx].center_angle);
-            remaining_mm = (objects[smallest_idx].ping_dist
-                           - TARGET_PROXIMITY_CM) * 10.0;
-            total_driven = 0.0;     /* reset since we re-oriented */
-        }
-
-        /* Progress update */
-        sprintf(msg, "  Step: %.0f mm | Remaining: %.0f mm\r\n",
-                total_driven, remaining_mm);
-        uart_sendStr(msg);
-
-        lcd_clear();
-        lcd_printf("Auto: Driving\n%.0f mm left", remaining_mm);
-    }
-
-    /* ---- STOP: We made it ----------------------------------------------- */
-    oi_setWheels(0, 0);
-    uart_sendStr("\r\n***********************************\r\n");
-    uart_sendStr("*** TARGET REACHED! (within 10 cm) ***\r\n");
-    uart_sendStr("***********************************\r\n");
-    lcd_clear();
-    lcd_printf("TARGET REACHED!\n<= 10 cm");
+}
 }
 
 /**
@@ -336,13 +247,13 @@ char nav_manual_mode(oi_t *sensor_data)
     char received;
     char msg[120];
     double dist_traveled;
-
+/*
     uart_sendStr("\r\n=== MANUAL MODE ===\r\n");
     uart_sendStr("  'w' = Forward 10cm   's' = Backward 10cm\r\n");
     uart_sendStr("  'a' = Turn left 15   'd' = Turn right 15\r\n");
     uart_sendStr("  'm' = Scan objects   't' = Toggle to auto\r\n");
     uart_sendStr("  'q' = Quit program\r\n\r\n");
-
+*/
     lcd_clear();
     lcd_printf("MANUAL MODE\nWASD to drive");
 
@@ -435,4 +346,18 @@ char nav_manual_mode(oi_t *sensor_data)
             break;
         }
     }
+}
+void boundrydetection(oi_t *sensor_data, detected_obj_t objects[MAX_OBJECTS], int smallest_idx ) {
+    if(2500<=(sensor_data->cliffFrontLeftSignal || sensor_data->cliffFrontRightSignal || sensor_data->cliffLeftSignal || sensor_data->cliffRightSignal)){
+        turn_to_face(sensor_data, objects[smallest_idx].center_angle-180);
+        move_backward(sensor_data, BACKUP_DIST_MM);
+
+    }
+    if(500>=(sensor_data->cliffFrontLeftSignal || sensor_data->cliffFrontRightSignal || sensor_data->cliffLeftSignal || sensor_data->cliffRightSignal)){
+           turn_to_face(sensor_data, objects[smallest_idx].center_angle-180);
+           move_backward(sensor_data, BACKUP_DIST_MM);
+
+       }
+
+        return;
 }

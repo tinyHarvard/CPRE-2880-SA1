@@ -11,7 +11,7 @@
  *   Pass 1 sweeps the servo 0-180 degrees collecting IR sensor data.
  *   Multiple IR readings are averaged at each angle to reduce noise.
  *   The IR values are used for edge detection because the IR beam is narrower
- *   than the PING cone â€” think of IR as a laser pointer vs PING as a flashlight.
+ *   than the PING cone — think of IR as a laser pointer vs PING as a flashlight.
  *   Pass 2 points the servo at each detected object center and takes a PING
  *   distance measurement.
  *
@@ -25,7 +25,7 @@
  *   PING: Wide cone, low noise, less angular precision => use for distance only
  *
  * REVISION NOTES:
- * - Lab 7: New file â€” replaces Lab 3 PING-only scan with IR+PING approach
+ * - Lab 7: New file — replaces Lab 3 PING-only scan with IR+PING approach
  */
 
 #include "cyBot_Scan.h"
@@ -42,40 +42,28 @@
 
 /* IR averaging: take this many readings per angle and average them.
  * More samples = less noise, but slower scan. 5 is a good balance.         */
-#define IR_NUM_SAMPLES  5
-
-/* PING averaging: take this many readings at each object center.
- * Matching IR sample count keeps timing and noise filtering consistent.      */
-#define PING_NUM_SAMPLES 5
+#define IR_NUM_SAMPLES  3
 
 /* IR distance threshold in raw ADC-converted cm.
  * Readings below this value indicate an object is present.
  * The IR sensor is only accurate from ~9 to ~80 cm per the datasheet.
  * ADJUST this value based on your specific CyBot and test field.           */
-#define IR_THRESHOLD    600.0f
+#define IR_THRESHOLD    690.0f
 
 /* Minimum angular width (degrees) to count as a real object.
  * Objects narrower than this are likely noise blips.                        */
-#define MIN_OBJ_WIDTH   3
+#define MIN_OBJ_WIDTH   2
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-
-/* PING pulse-width to distance conversion.
- * cyBOT_Scan returns the echo pulse width in microseconds, not cm.
- * distance_cm = (speed_of_sound * pulse_us) / 2
- *             = (34000 cm/s * pulse_us * 1e-6) / 2
- *             = pulse_us / 58.82
- * Using speed of sound = 340 m/s as specified for this course.           */
-#define PING_TO_CM(pulse_us)  ((pulse_us) / 58.82f)
 
 /**
  * average_ir_reading - Take multiple IR readings at one angle and average
  *
  * Calls cyBOT_Scan() NUM_SAMPLES times at the given angle, summing the
  * IR distance values and returning the average. This is like taking the
- * temperature 5 times and averaging â€” any single bad reading gets diluted.
+ * temperature 5 times and averaging — any single bad reading gets diluted.
  *
  * Note: We only use the IR distance (scan_data.IR_raw_val is the raw ADC
  * value, but cyBOT_Scan already converts it to sound_dist and IR_raw_val).
@@ -86,6 +74,25 @@
  * @param ping_out   Pointer to store the last PING reading (cm), or NULL
  * @return           Averaged IR raw ADC value at this angle
  */
+void calibrate_servo(void) {
+    cyBOT_SERVRO_cal_t cal;
+        char msg[80];
+
+        uart_sendStr("\r\n--- Starting Servo Calibration ---\r\n");
+        uart_sendStr("Watch the servo sweep to find its endpoints...\r\n");
+
+        cal = cyBOT_SERVO_cal();
+
+        right_calibration_value = cal.right;
+        left_calibration_value  = cal.left;
+
+        sprintf(msg, "Calibration complete:\r\n"
+                     "  Right (0 deg):   %d\r\n"
+                     "  Left  (180 deg): %d\r\n", cal.right, cal.left);
+        uart_sendStr(msg);
+}
+
+
 static float average_ir_reading(int angle, float *ping_out)
 {
     cyBOT_Scan_t scan_data;
@@ -105,38 +112,6 @@ static float average_ir_reading(int angle, float *ping_out)
     }
 
     return ir_sum / IR_NUM_SAMPLES;
-}
-
-/**
- * average_ping_reading_cm - Take multiple PING readings and average in cm
- *
- * Calls cyBOT_Scan() PING_NUM_SAMPLES times at the given angle, converts
- * each sound_dist pulse width to centimeters, and returns the average.
- *
- * @param angle      Servo angle in degrees (0-180)
- * @param ir_out     Pointer to store averaged IR raw ADC value, or NULL
- * @return           Averaged PING distance in centimeters
- */
-static float average_ping_reading_cm(int angle, float *ir_out)
-{
-    cyBOT_Scan_t scan_data;
-    float ping_sum_cm = 0.0f;
-    float ir_sum = 0.0f;
-    int i;
-
-    for (i = 0; i < PING_NUM_SAMPLES; i++)
-    {
-        cyBOT_Scan(angle, &scan_data);
-        ping_sum_cm += PING_TO_CM(scan_data.sound_dist);
-        ir_sum += scan_data.IR_raw_val;
-    }
-
-    if (ir_out != NULL)
-    {
-        *ir_out = ir_sum / PING_NUM_SAMPLES;
-    }
-
-    return ping_sum_cm / PING_NUM_SAMPLES;
 }
 
 /**
@@ -172,10 +147,10 @@ int scan_objects(detected_obj_t objects[], int max_count)
 
     /* Pre-scan settle: move servo to start position and discard first reading.
      * This prevents the servo from still moving during the first real reading,
-     * which would blur the data â€” like taking a photo while the camera is
+     * which would blur the data — like taking a photo while the camera is
      * still panning.                                                         */
     cyBOT_Scan(SCAN_START, &settle);
-    timer_waitMillis(200);
+
 
     uart_sendStr("\r\n--- Pass 1: IR Edge Detection Scan ---\r\n");
     sprintf(line, "%-10s%-16s\r\n", "Degrees", "Avg IR Value");
@@ -209,7 +184,7 @@ int scan_objects(detected_obj_t objects[], int max_count)
             /* TRACKING state: look for IR value to drop below threshold */
             if (avg_ir <= IR_THRESHOLD)
             {
-                /* Object edge ended â€” record it if wide enough */
+                /* Object edge ended — record it if wide enough */
                 int width = (angle - SCAN_STEP) - current_start;
                 if (width >= MIN_OBJ_WIDTH && obj_count < max_count)
                 {
@@ -245,15 +220,26 @@ int scan_objects(detected_obj_t objects[], int max_count)
         }
     }
 
-    /* ---- PASS 2: averaged PING at each object center for distance ---------- */
+    /* ---- PASS 2: PING at each object center for distance ------------------ */
     uart_sendStr("\r\n--- Pass 2: PING Distance at Object Centers ---\r\n");
 
     for (i = 0; i < obj_count; i++)
     {
+        cyBOT_Scan_t ping_data;
         int rounded_angle = (int)(objects[i].center_angle + 0.5f);
-        objects[i].ping_dist = average_ping_reading_cm(rounded_angle,
-                                                       &objects[i].ir_value);
- 
+        cyBOT_Scan(rounded_angle, &ping_data);
+        timer_waitMicros(50);
+        cyBOT_Scan(rounded_angle, &ping_data);
+         float bob=ping_data.sound_dist;
+         cyBOT_Scan(rounded_angle, &ping_data);//use mode insted
+         float bob1=ping_data.sound_dist;
+
+        cyBOT_Scan(rounded_angle, &ping_data);
+        float bob2=ping_data.sound_dist;
+
+        objects[i].ping_dist = (bob1+bob+bob2)/3;
+        objects[i].ir_value  = ping_data.IR_raw_val;
+
         /* Linear width calculation (Lab 7 Part 2):
          * Convert radial width from degrees to radians, then multiply by
          * the distance to get the actual physical width of the object.
@@ -316,20 +302,22 @@ void print_object_table(detected_obj_t objects[], int obj_count)
     int smallest = find_smallest_linear(objects, obj_count);
 
     uart_sendStr("\r\n======================== Detected Objects =========================\r\n");
-    sprintf(line, "%-6s%-12s%-12s%-14s%-14s%-10s\r\n",
-            "Obj#", "Angle(deg)", "Dist(cm)", "Rad Wid(deg)", "Lin Wid(cm)", "IR Value");
+    sprintf(line, "%-6s%-12s%-12s%-10s%-10s%-9s%-5s%-5s\r\n",
+            "Obj#", "Angle(deg)", "Dist(cm)", "Rad Wid(deg)", "Lin Wid(cm)", "IR Value","start:", "end:");
     uart_sendStr(line);
     uart_sendStr("----  ----------  ----------  ------------  ------------  --------\r\n");
 
     for (i = 0; i < obj_count; i++)
     {
-        sprintf(line, "%-6d%-12.1f%-12.1f%-14d%-14.1f%-10.0f%s\r\n",
+        sprintf(line, "%-6d%-12.1f%-12.1f%-14d%-14.1f%-10.0f %d %d\r\n",
                 i + 1,
                 objects[i].center_angle,
                 objects[i].ping_dist,
                 objects[i].radial_width,
                 objects[i].linear_width,
                 objects[i].ir_value,
+                objects[i].start_angle,
+                objects[i].end_angle,
                 (i == smallest) ? " *" : "");
         uart_sendStr(line);
     }
@@ -341,4 +329,202 @@ void print_object_table(detected_obj_t objects[], int obj_count)
 
     uart_sendStr("=========================================================\r\n");
     uart_sendStr("  * = smallest linear width (navigation target)\r\n");
+}
+
+void print_gap_table(detected_gap_t gaps[], int gap_count)
+{
+    char line[120];
+    int i;
+    find_viable_angles(gaps, gap_count);
+
+    uart_sendStr("\r\n======================== Detected Gaps =========================\r\n");
+    sprintf(line, "Gap#   start angle:   end angle:   gap width:   viable:\r\n");
+    uart_sendStr(line);
+    uart_sendStr("----   ----------   ----------   ------------   ------------  --------\r\n");
+
+    for (i = 0; i < gap_count; i++)
+    {
+        sprintf(line, "%d       %d         %d         %f       %d   \r\n",
+                i + 1,
+                gaps[i].gap_start_angle,
+                gaps[i].gap_end_angle,
+                gaps[i].lin_gap_between_obj,
+                gaps[i].viable);
+        uart_sendStr(line);
+    }
+
+}
+int find_viable_angles(detected_gap_t gaps[], int gap_count){
+float sybotlinwidth=35;
+int i=0;
+for (i = 0; i < gap_count; i++){
+
+   if(gaps[i].lin_gap_between_obj>=sybotlinwidth){
+
+       gaps[i].viable=1;
+
+
+   }
+   else{
+       gaps[i].viable=0;
+   }
+ }
+
+return 0;
+}
+
+ int select_gap(detected_gap_t gap[], int gap_count, float deg){
+     int i;
+     for (i = 0; i < gap_count; i++){
+
+        if(gap[i].viable==1){
+         if(abs(deg-gap[i].gap_start_angle)>abs(deg-gap[i].gap_end_angle)){
+             gap[i].deg_from_goal= abs(deg-gap[i].gap_end_angle);
+
+         }
+         else{
+             gap[i].deg_from_goal= abs(deg-gap[i].gap_start_angle);
+         }
+
+
+
+        }
+      }
+     int z=9;
+     gap[z].deg_from_goal=180;
+     for (i = 0; i < gap_count; i++){
+         if(gap[i].viable==1){
+
+           if(gap[z].deg_from_goal>=gap[i].deg_from_goal){
+           z=i;
+
+
+
+
+           }}
+         }
+    if(gap[z].lin_gap_between_obj>=45){
+
+
+
+        if(abs(deg-gap[z].gap_start_angle)>abs(deg-gap[z].gap_end_angle)){
+
+            float angbob=35/gap[z].dist;
+                angbob=angbob*180/M_PI;
+            gap[z].chosen_movement_angle=(float)gap[z].gap_end_angle-angbob;
+            return z;
+        }
+        else{
+            float angbob=35/gap[z].dist;
+            angbob=angbob*180/M_PI;
+                     gap[z].chosen_movement_angle=(float)gap[z].gap_start_angle+angbob;
+            return z;
+
+        }
+
+    }
+    else{
+        gap[z].chosen_movement_angle=(float)(gap[z].gap_start_angle+gap[z].gap_end_angle)/2;
+  return z;
+
+    }
+
+ }
+
+
+
+
+int gap_measurment(detected_obj_t objects[], int obj_count, detected_gap_t gap[]){
+int k=0;
+int i=0;
+int gapbeforeobj;
+int gapafterobj;
+if(obj_count==0){
+   for(i=0; i==9; i++){
+       gap[i].gap_start_angle=0;
+       gap[i].gap_end_angle=0;
+       gap[i].lin_gap_between_obj=0;
+       gap[i].deg_from_goal=0;
+       gap[i].viable=0;
+       gap[i].chosen_movement_angle=0;
+   }
+    return 0;
+}
+
+/* if there is a gap before any objects are dectected*/
+   if(objects[0].start_angle!=0){
+       gap[k].gap_start_angle=0;
+       gapbeforeobj=1;
+
+
+      gap[k].gap_end_angle=objects[0].start_angle;
+
+       gap[k].lin_gap_between_obj = objects[0].ping_dist*((gap[k].gap_end_angle)* M_PI / 180);
+               k++;
+   }
+/*verything above this is good*/
+
+for(i=1; i<obj_count; i++){
+
+
+       gap[k].gap_start_angle=objects[i-1].end_angle;
+       gap[k].gap_end_angle=objects[i].start_angle;
+
+
+
+    k++;
+    if((i==obj_count-1)&&(objects[i].end_angle!=180)){
+        gapafterobj=1;
+               gap[k].gap_start_angle=objects[i].end_angle;
+                      gap[k].gap_end_angle=180;
+                      k++;
+           }
+
+}
+for(i=0; i<=k; i++){
+
+
+
+if(objects[i].ping_dist>objects[i-1].ping_dist){
+
+           gap[i].lin_gap_between_obj = objects[i-1].ping_dist*((float)(gap[i].gap_end_angle-gap[i].gap_start_angle)* M_PI / 180);
+           gap[i].dist=objects[i-1].ping_dist;
+
+       }
+       else {
+           gap[i].lin_gap_between_obj = objects[i].ping_dist*((float)(gap[i].gap_end_angle-gap[i].gap_start_angle)* M_PI / 180);
+           gap[i].dist=objects[i].ping_dist;
+
+       }
+if((i==0)&&(gapbeforeobj==1)){
+
+           gap[i].lin_gap_between_obj = objects[0].ping_dist*((float)(gap[i].gap_end_angle-gap[i].gap_start_angle)* M_PI / 180);
+           gap[i].dist=objects[0].ping_dist;
+
+       }
+if((i==k-1)&&(gapafterobj==1)){
+
+           gap[i].lin_gap_between_obj = objects[obj_count-1].ping_dist*((float)(gap[i].gap_end_angle-gap[i].gap_start_angle)* M_PI / 180);
+           gap[i].dist=objects[obj_count-1].ping_dist;
+
+       }
+}
+char line[120];
+
+
+   uart_sendStr("\r\n======================== Detected Gaps =========================\r\n");
+   sprintf(line, "Gap#   start angle:   end angle:   gap width:   viable:\r\n");
+   uart_sendStr(line);
+   uart_sendStr("----  ----------  ----------  ------------  ------------  --------\r\n");
+
+   for (i = 0; i < k; i++)
+   {
+       sprintf(line, "%d    %d     %d     %f \r\n",
+               i + 1,
+               gap[i].gap_start_angle,
+               gap[i].gap_end_angle,
+               gap[i].lin_gap_between_obj);
+       uart_sendStr(line);
+   }
+return k;
 }
