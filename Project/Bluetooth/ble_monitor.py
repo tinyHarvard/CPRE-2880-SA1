@@ -20,22 +20,22 @@ import numpy as np
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BAUD            = 115200
-WINDOW          = 50        # rolling RSSI window (~5 packets/sec)
-DWELL_TIME      = 20.0      # seconds to collect at each stop
-MIN_SAMPLES_POS = 50        # minimum samples before a stop is "ready"
+WINDOW          = 100       # rolling RSSI window (~5 packets/sec)
+DWELL_TIME      = 10.0      # seconds to collect at each stop
+MIN_SAMPLES_POS = 50       # minimum samples before a stop is "ready"
 AUTO_ADVANCE    = False     # True = auto-advance after DWELL_TIME
                             # False = wait for "Next Position" button
-TRANSIT_TIME    = 2.0       # seconds between stops for bot to travel
+TRANSIT_TIME    = 5.0       # seconds between stops for bot to travel
 
 # ── Filtering config ──────────────────────────────────────────────────────────
 ZSCORE_THRESH   = 2.0
 IQR_FENCE       = 1.5
-EWM_ALPHA       = 0.1
+EWM_ALPHA       = 0.3
 MIN_SAMPLES     = 5
 
 # ── Trilateration config ──────────────────────────────────────────────────────
-TX_POWER_1M = -62.0
-PATH_LOSS   = 2.5
+TX_POWER_1M = -74.0
+PATH_LOSS   = 3
 NUM_ANCHORS = 6
 
 DEFAULT_ANCHOR_POS = {
@@ -54,6 +54,7 @@ TX_LABELS = {i: f"Stop {i}" for i in range(NUM_ANCHORS)}
 rssi_buffers    = {i: deque(maxlen=WINDOW) for i in range(NUM_ANCHORS)}
 anchor_pos      = dict(DEFAULT_ANCHOR_POS)
 ema_dist        = {i: None for i in range(NUM_ANCHORS)}
+locked_dist     = {i: None for i in range(NUM_ANCHORS)}  # distance locked when stop is ready
 data_lock       = threading.Lock()
 
 current_stop    = 0
@@ -99,7 +100,6 @@ def arduino_reader_thread(port: str):
                 print(f"[Sensor] Serial open on {port}")
                 while True:
                     raw = ser.readline().decode("utf-8", errors="ignore")
-                    print(f"[DEBUG] raw: {repr(raw)}")   # temporary debug
                     row = parse_arduino_line(raw)
                     if row is None:
                         continue
@@ -130,7 +130,8 @@ def stop_manager_thread():
     # reset EMA so stale values from a previous run don't seed the filter
     with data_lock:
         for i in range(NUM_ANCHORS):
-            ema_dist[i] = None
+            ema_dist[i]    = None
+            locked_dist[i] = None
 
     for stop_idx in range(NUM_ANCHORS):
         if stop_idx > 0:
@@ -144,6 +145,11 @@ def stop_manager_thread():
         with state_lock:
             current_stop = stop_idx
             stop_start_time[0] = time.monotonic()
+
+        # reset EMA for this stop so it starts fresh from first reading
+        with data_lock:
+            ema_dist[stop_idx] = None
+
         print(f"\n[MOVE] Arrived at position {stop_idx}  {anchor_pos[stop_idx]}")
         print(f"[MOVE] Collecting for {DWELL_TIME}s …")
 
@@ -161,9 +167,21 @@ def stop_manager_thread():
         with state_lock:
             stop_ready[stop_idx] = (n >= MIN_SAMPLES_POS)
 
+        # lock the distance for this stop based on final averaged RSSI
+        MAX_PLAUSIBLE_DIST = 300.0   # units — discard stops with unrealistic distances
+        if buf:
+            filt = filter_rssi(buf)
+            med  = statistics.median(filt)
+            d    = rssi_to_distance(med)
+            if d <= MAX_PLAUSIBLE_DIST:
+                with data_lock:
+                    locked_dist[stop_idx] = d
+                print(f"  locked_dist[{stop_idx}] = {d:.2f}")
+            else:
+                print(f"  [WARN] Stop {stop_idx} distance {d:.2f} exceeds max — discarded")
+
         avg = sum(buf) / len(buf) if buf else 0
-        print(f"[STOP {stop_idx}] Samples: {n}  |  "
-              f"Avg RSSI: {avg:.1f} dBm  |  Ready: {stop_ready[stop_idx]}")
+        print(f"[STOP {stop_idx}] Samples: {n}  |  Ready: {stop_ready[stop_idx]}")
 
     with state_lock:
         collecting = False
@@ -213,7 +231,7 @@ def filter_rssi(samples: list) -> list:
 
 
 def rssi_to_distance(rssi_dbm: float) -> float:
-    return 10.0 ** ((TX_POWER_1M - rssi_dbm) / (10.0 * PATH_LOSS))
+    return 10.0 ** ((TX_POWER_1M - rssi_dbm) / (10.0 * PATH_LOSS)) * 100
 
 
 def smoothed_distance(anchor_id: int, raw_dist: float) -> float:
@@ -470,9 +488,16 @@ def run_plot():
                     f"Stop {stop} / {NUM_ANCHORS-1}  —  Position {anchor_pos[stop]}"
                     f"  |  {len(bufs[stop])} samples  |  Press 'Next Position' when ready")
         else:
-            ready_ids = [i for i in range(NUM_ANCHORS) if ready[i] and i in avg_data]
+            with data_lock:
+                locked = dict(locked_dist)
+            ready_ids = [i for i in range(NUM_ANCHORS)
+                         if ready[i] and locked[i] is not None]
             if len(ready_ids) >= 3:
-                circles = [(anchor_pos[i], avg_data[i][1]) for i in ready_ids]
+                circles = [(anchor_pos[i], locked[i]) for i in ready_ids]
+                if not printed_result[0]:
+                    print("\n=== Trilateration Input ===")
+                    for i in ready_ids:
+                        print(f"  Stop {i} pos={anchor_pos[i]}  locked_dist={locked[i]:.2f}")
                 pos = trilaterate(circles)
                 if pos:
                     target_dot.set_data([pos[0]], [pos[1]])
