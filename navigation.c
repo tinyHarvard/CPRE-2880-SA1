@@ -34,6 +34,9 @@
 #include "scan.h"
 #include "navigation.h"
 #include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include "bno055.h"
 
 /* ---- Navigation tuning constants ---------------------------------------- */
 #define DRIVE_SPEED         100     /* mm/s for lateral avoidance moves       */
@@ -84,6 +87,34 @@ void move_lateral(oi_t *sensor_data, double distance_mm) {
  * @param sensor_data   Pointer to oi_t struct
  * @param target_angle  Scan angle of the target (0-180 degrees)
  */
+void turntonorth(bno_t *bno, oi_t *sensor_data){
+    char buf[256];
+    float bob7=0;
+    int i=0;
+    int k=0;
+    while(k==0){
+    bno_update(bno);
+    // Magnetometer (1 uT = 16 LSB)
+     bob7+= (atan2(bno->mag.y, bno->mag.x) * 180) / M_PI;
+          sprintf(buf,
+                  "Mag      X=%6d Y=%6d Z=%6d angle: %f\r\n",
+                  bno->mag.x, bno->mag.y, bno->mag.z, bob7);
+          uart_sendStr(buf);
+          i++;
+
+          if(i==1){
+              i=0;
+             bob7= bob7/1;
+             if((bob7<=32)&&(bob7>=28)){
+             k=1;
+          }
+             else{
+                 turn_left(sensor_data, (double)3);
+                 bob7=0;
+             }
+
+    }
+}}
 static void turn_to_face(oi_t *sensor_data, float target_angle)
 {
     char msg[80];
@@ -166,6 +197,32 @@ void nav_bump_avoidance(oi_t *sensor_data, int hit_right, int hit_left)
     oi_update(sensor_data);
     uart_sendStr("  Avoidance complete.\r\n");
 }
+void nav_dect(oi_t *sensor_data, int hit_right, int hit_left)
+{
+    char msg[80];
+ if(hit_right==1||hit_left==1){
+    sprintf(msg, "  BUMP detected (L=%d R=%d) — avoiding...\r\n",
+            hit_left, hit_right);
+    uart_sendStr(msg);
+
+
+ }
+
+if((2500<sensor_data->cliffFrontLeftSignal || 2500<sensor_data->cliffFrontRightSignal || 2500<sensor_data->cliffLeftSignal || 2500<sensor_data->cliffRightSignal)){
+    sprintf(msg, "  PIT detected Front_left: %d Front_right: %d Left: %d Right: %d   \r\n",
+            sensor_data->cliffFrontLeftSignal, sensor_data->cliffFrontRightSignal, sensor_data->cliffLeftSignal, sensor_data->cliffRightSignal);
+      uart_sendStr(msg);
+
+}
+if((sensor_data->cliffFrontLeftSignal<500 || sensor_data->cliffFrontRightSignal<500 || sensor_data->cliffLeftSignal<500 || sensor_data->cliffRightSignal<500)){
+    sprintf(msg, "  boundry detected Front_left: %d Front_right: %d Left: %d Right: %d   \r\n",
+            sensor_data->cliffFrontLeftSignal, sensor_data->cliffFrontRightSignal, sensor_data->cliffLeftSignal, sensor_data->cliffRightSignal);
+      uart_sendStr(msg);
+
+}
+
+
+}
 
 /**
  * nav_auto_drive - Autonomous mode: scan, drive to smallest object
@@ -187,7 +244,7 @@ void nav_bump_avoidance(oi_t *sensor_data, int hit_right, int hit_left)
 void nav_auto_drive(oi_t *sensor_data, float cm, float deg)
 {
     detected_obj_t objects[MAX_OBJECTS];
-
+while(cm>10){
     int obj_count;
     char msg[120];
     sprintf(msg, "\r\nTarget at cm: %f deg: %f \r\n",
@@ -197,7 +254,7 @@ void nav_auto_drive(oi_t *sensor_data, float cm, float deg)
 
         /* ---- TURN: Face the target ------------------------------------------ */
         turn_to_face(sensor_data, deg);
-
+        deg=90;
 
     /* ---- SCAN: Find all objects and pick the viable gaps -------------------- */
     uart_sendStr("\r\n=== AUTONOMOUS MODE: Scanning... ===\r\n");
@@ -213,14 +270,18 @@ void nav_auto_drive(oi_t *sensor_data, float cm, float deg)
      print_gap_table(gap, gap_count);
 
      /* ---- select_gap -------------------- */
-     int indexchosengap=select_gap(gap, gap_count, deg,  cm);
+     int indexchosengap=select_gap(gap, gap_count, deg);
+     char line[120];
+           sprintf(line, "chosen gap: %d Angle: %f   \r\n",
+                   indexchosengap+1,gap[indexchosengap].chosen_movement_angle );
+                uart_sendStr(line);
      turn_to_face(sensor_data,gap[indexchosengap].chosen_movement_angle);
      move_lateral(sensor_data, 800);
 
+cm=cm-50;
 
 
-
-
+}
 }
 
 /**
@@ -261,13 +322,13 @@ char nav_manual_mode(oi_t *sensor_data)
         {
         case 'w':
             uart_sendStr("  >> Forward 10 cm\r\n");
-            dist_traveled = move_forward(sensor_data, MANUAL_DRIVE_DIST);
+            dist_traveled = move_forward(sensor_data, MANUAL_DRIVE_DIST*10);
 
-            if (sensor_data->bumpLeft || sensor_data->bumpRight)
+            if (sensor_data->bumpLeft || sensor_data->bumpRight||(2500<(sensor_data->cliffFrontLeftSignal || sensor_data->cliffFrontRightSignal || sensor_data->cliffLeftSignal || sensor_data->cliffRightSignal))||(500>(sensor_data->cliffFrontLeftSignal || sensor_data->cliffFrontRightSignal || sensor_data->cliffLeftSignal || sensor_data->cliffRightSignal)))
             {
                 int bump_r = sensor_data->bumpRight;
                 int bump_l = sensor_data->bumpLeft;
-                nav_bump_avoidance(sensor_data, bump_r, bump_l);
+                nav_dect(sensor_data, bump_r, bump_l);
             }
 
             sprintf(msg, "  Moved: %.1f mm\r\n", dist_traveled);
