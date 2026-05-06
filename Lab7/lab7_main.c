@@ -68,16 +68,18 @@
 #define SERVO_CAL_LEFT      1224750     /* Pulse width for 180° (leftmost) */
 
 /**
- * uart_read_line - Read a CR/LF-terminated line via the RX-interrupt path.
+ * uart_read_line - Read user input via the RX-interrupt path.
  *
- * Polls `last_char_received` (set by UART1_Handler) one byte at a time,
- * echoing each character back to the user. Backspace edits in place.
- * Returns when the user presses Enter (CR or LF). The buffer is always
- * null-terminated. Maximum length includes the terminator.
+ * UART1_Handler already echoes every received byte and consumes '\r'/'\n'
+ * silently (without setting last_char_received), so this function does
+ * not write to TX (would cause doubling) and cannot rely on seeing a
+ * newline byte. End-of-line is inferred by a 400 ms idle window after
+ * at least one character has been typed.
  */
 static void uart_read_line(char *buf, int max_len)
 {
     int idx = 0;
+    int idle_ms = 0;
     char c;
 
     if (max_len <= 0)
@@ -90,24 +92,28 @@ static void uart_read_line(char *buf, int max_len)
         if (last_char_received == 0)
         {
             timer_waitMillis(1);
+            if (idx > 0)
+            {
+                idle_ms++;
+                if (idle_ms >= 400)
+                {
+                    /* User stopped typing for 400 ms — treat as end of input.
+                     * The ISR consumed any '\r'/'\n' silently. */
+                    break;
+                }
+            }
             continue;
         }
 
         c = last_char_received;
         last_char_received = 0;
-
-        if (c == '\r' || c == '\n')
-        {
-            uart_sendStr("\r\n");
-            break;
-        }
+        idle_ms = 0;
 
         if (c == '\b' || c == 0x7F)
         {
             if (idx > 0)
             {
                 idx--;
-                uart_sendStr("\b \b");
             }
             continue;
         }
@@ -115,7 +121,6 @@ static void uart_read_line(char *buf, int max_len)
         if (idx < max_len - 1)
         {
             buf[idx++] = c;
-            uart_sendChar(c);
         }
     }
 
