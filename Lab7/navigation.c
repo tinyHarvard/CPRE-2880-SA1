@@ -34,11 +34,25 @@
 #include "scan.h"
 #include "navigation.h"
 #include <stdio.h>
+#include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+/* Cliff-signal thresholds shared with boundrydetection() so move_forward_auto
+ * stops mid-step on the same conditions the escape routine uses. */
+#define CLIFF_TAPE_THRESH    2500
+#define CLIFF_DROPOFF_THRESH 500
+
+/* Same DRIVE_SPEED used by movement.c — copied here so move_forward_auto
+ * does not depend on movement.c's private constant. */
+#define AUTO_DRIVE_SPEED     200
 
 /* ---- Navigation tuning constants ---------------------------------------- */
 #define DRIVE_SPEED         100     /* mm/s for lateral avoidance moves       */
 #define BACKUP_DIST_MM      150.0   /* mm to back up after a bump             */
-#define LATERAL_DIST_MM     250.0   /* mm to sidestep around obstacle         */
+#define LATERAL_DIST_MM     800.0   /* mm to sidestep around obstacle         */
 #define TURN_ANGLE_DEG      80.0    /* calibrated 90° turn (Lab 2 value)      */
 #define TARGET_PROXIMITY_CM 15    /* stop when this close to target (cm)    */
 #define AUTO_DRIVE_STEP_MM  300.0  /* mm per forward increment in auto mode  */
@@ -169,7 +183,7 @@ void nav_bump_avoidance(oi_t *sensor_data, int hit_right, int hit_left)
     }
 
     /* Step 3: Sidestep laterally to get around the obstacle */
-    move_lateral(sensor_data, 800);
+    move_lateral(sensor_data, LATERAL_DIST_MM);
 
     /* Step 4: Turn back toward original heading */
     if (hit_left)
@@ -187,83 +201,208 @@ void nav_bump_avoidance(oi_t *sensor_data, int hit_right, int hit_left)
 }
 
 /**
- * nav_auto_drive - Autonomous mode: scan, drive to smallest object
+ * move_forward_auto - Forward drive with mid-step cliff + bump checks.
  *
- * State machine:
- *   SCAN    -> detect all objects, find smallest linear width
- *   TURN    -> rotate to face the target
- *   DRIVE   -> move forward in 300mm increments
- *   BUMP    -> if bump detected, run avoidance
- *   RE-SCAN -> after avoidance, re-scan to relocate target
- *   STOP    -> within 10cm of target, halt and report
+ * Mirrors move_forward() in movement.c but also samples the four cliff
+ * signals each oi_update so the bot can react to tape/drop-off without
+ * waiting for the full requested distance to finish.
+ */
+move_result_t move_forward_auto(oi_t *sensor_data,
+                                double distance_mm,
+                                double *out_traveled_mm)
+{
+    double distance_sum = 0.0;
+    move_result_t result = MOVE_OK;
+
+    oi_setWheels(AUTO_DRIVE_SPEED, AUTO_DRIVE_SPEED);
+
+    while (distance_sum < distance_mm)
+    {
+        oi_update(sensor_data);
+
+        if (command_flag)
+        {
+            result = MOVE_ABORT;
+            break;
+        }
+
+        distance_sum += sensor_data->distance;
+
+        if (sensor_data->cliffLeftSignal       >= CLIFF_TAPE_THRESH ||
+            sensor_data->cliffFrontLeftSignal  >= CLIFF_TAPE_THRESH ||
+            sensor_data->cliffFrontRightSignal >= CLIFF_TAPE_THRESH ||
+            sensor_data->cliffRightSignal      >= CLIFF_TAPE_THRESH ||
+            sensor_data->cliffLeftSignal       <= CLIFF_DROPOFF_THRESH ||
+            sensor_data->cliffFrontLeftSignal  <= CLIFF_DROPOFF_THRESH ||
+            sensor_data->cliffFrontRightSignal <= CLIFF_DROPOFF_THRESH ||
+            sensor_data->cliffRightSignal      <= CLIFF_DROPOFF_THRESH)
+        {
+            result = MOVE_BOUNDARY;
+            break;
+        }
+
+        if (sensor_data->bumpLeft || sensor_data->bumpRight)
+        {
+            result = MOVE_BUMP;
+            break;
+        }
+    }
+
+    oi_setWheels(0, 0);
+
+    if (out_traveled_mm != NULL)
+    {
+        *out_traveled_mm = distance_sum;
+    }
+    return result;
+}
+
+/**
+ * nav_auto_drive - Autonomous mode: navigate to a user-specified destination.
  *
- * The function also checks for UART input between drive steps so the
- * user can press 't' to toggle to manual mode or 'q' to quit at any
- * time. This uses uart_receive_nonblocking() so we do not stall.
+ * The destination is given in polar form relative to the starting pose:
+ *   target_cm  = straight-line distance to destination (cm)
+ *   target_deg = bearing in the starting servo frame
+ *                (90 = straight ahead, 0 = far right, 180 = far left)
  *
- * @param sensor_data  Pointer to oi_t struct (already initialized)
+ * The function maintains a local pose (pose_x_cm, pose_y_cm,
+ * pose_heading_deg) starting at (0, 0, 0). Each loop iteration recomputes
+ * the destination's current bearing in the live servo frame so the gap
+ * picker always aims toward the actual destination — not a stale angle
+ * from before the last turn.
+ *
+ * Loop:
+ *   1. abort?  arrived?
+ *   2. scan    -> objects -> gaps -> select_gap(live target_deg_servo)
+ *   3. turn to chosen gap angle (update heading)
+ *   4. move_forward_auto in AUTO_DRIVE_STEP_MM increments (update x,y)
+ *   5. handle MOVE_BOUNDARY (escape) / MOVE_BUMP (avoid) / MOVE_ABORT
  */
 void nav_auto_drive(oi_t *sensor_data, float target_cm, float target_deg)
 {
     detected_obj_t objects[MAX_OBJECTS];
+
+    /* Convert polar destination -> Cartesian in the starting frame.
+     * Servo 90 deg is +y (straight ahead), servo 0 is +x (right). */
+    double target_x = (double)target_cm
+                    * sin(((double)target_deg - 90.0) * M_PI / 180.0);
+    double target_y = (double)target_cm
+                    * cos(((double)target_deg - 90.0) * M_PI / 180.0);
+
+    double pose_x_cm = 0.0;
+    double pose_y_cm = 0.0;
+    double pose_heading_deg = 0.0;   /* 0 = facing initial +y axis */
+
+    {
+        char line[120];
+        sprintf(line, "\r\n=== AUTONOMOUS MODE ===\r\n"
+                      "  Destination: %.1f cm @ %.1f deg "
+                      "(world x=%.1f, y=%.1f cm)\r\n",
+                target_cm, target_deg, target_x, target_y);
+        uart_sendStr(line);
+    }
+
     while (1)
     {
         int obj_count;
         int gap_count;
         int chosen_gap;
         detected_gap_t gaps[MAX_GAPS];
+        double dx, dy, remaining_cm;
+        double world_bearing_deg, target_deg_servo;
+        char line[140];
 
         if (nav_abort_requested(sensor_data))
         {
             return;
         }
 
-        uart_sendStr("\r\n=== AUTONOMOUS MODE: Scanning... ===\r\n");
+        /* Live target geometry from current pose. */
+        dx = target_x - pose_x_cm;
+        dy = target_y - pose_y_cm;
+        remaining_cm = sqrt(dx * dx + dy * dy);
+
+        if (remaining_cm < (double)TARGET_PROXIMITY_CM)
+        {
+            sprintf(line, "\r\nArrived: within %.1f cm of destination "
+                          "(pose x=%.1f y=%.1f hdg=%.1f).\r\n",
+                    remaining_cm, pose_x_cm, pose_y_cm, pose_heading_deg);
+            uart_sendStr(line);
+            return;
+        }
+
+        /* atan2(dx, dy): 0 = +y (straight ahead in world), +ve = +x (right).
+         * Convert to servo frame: 90 = ahead, larger = left, smaller = right.
+         * Adding pose_heading_deg compensates for the bot having turned. */
+        world_bearing_deg = atan2(dx, dy) * 180.0 / M_PI;
+        target_deg_servo  = 90.0 - world_bearing_deg + pose_heading_deg;
+
+        sprintf(line, "\r\n[pose] x=%.1f y=%.1f hdg=%.1f | "
+                      "remaining=%.1f cm bearing(servo)=%.1f deg\r\n",
+                pose_x_cm, pose_y_cm, pose_heading_deg,
+                remaining_cm, target_deg_servo);
+        uart_sendStr(line);
+
+        uart_sendStr("=== AUTONOMOUS MODE: Scanning... ===\r\n");
         lcd_clear();
         lcd_printf("Auto: Scanning...");
 
         obj_count = scan_objects(objects, MAX_OBJECTS);
         print_object_table(objects, obj_count);
 
-        if (target_cm <= TARGET_PROXIMITY_CM)
-        {
-            uart_sendStr("\r\nArrived within 10 cm of target.\r\n");
-            return;
-        }
-
         gap_count = gap_measurment(objects, obj_count, gaps);
         print_gap_table(gaps, gap_count);
 
-        chosen_gap = select_gap(gaps, gap_count, target_deg);
+        chosen_gap = select_gap(gaps, gap_count, (float)target_deg_servo);
         if (chosen_gap < 0)
         {
-            uart_sendStr("\r\nNo viable gap found.\r\n");
+            uart_sendStr("\r\nNo viable gap found. Stopping.\r\n");
             return;
         }
 
+        sprintf(line, "chosen gap: %d Angle: %.1f deg Width: %.1f cm "
+                      "(target_deg=%.1f)\r\n",
+                chosen_gap + 1,
+                gaps[chosen_gap].chosen_movement_angle,
+                gaps[chosen_gap].lin_gap_between_obj,
+                target_deg_servo);
+        uart_sendStr(line);
+
+        /* Turn toward chosen gap and update heading. */
         {
-            char line[120];
-            sprintf(line, "chosen gap: %d Angle: %.1f deg Width: %.1f cm\r\n",
-                    chosen_gap + 1,
-                    gaps[chosen_gap].chosen_movement_angle,
-                    gaps[chosen_gap].lin_gap_between_obj);
-            uart_sendStr(line);
+            float chosen = gaps[chosen_gap].chosen_movement_angle;
+            float turn_amount = chosen - 90.0f;
+
+            if (turn_amount > 0.0f)
+            {
+                sprintf(line, "  Turning LEFT %.1f deg toward gap.\r\n",
+                        turn_amount);
+                uart_sendStr(line);
+                turn_left(sensor_data, (double)turn_amount);
+                pose_heading_deg -= (double)turn_amount;
+            }
+            else if (turn_amount < 0.0f)
+            {
+                sprintf(line, "  Turning RIGHT %.1f deg toward gap.\r\n",
+                        -turn_amount);
+                uart_sendStr(line);
+                turn_right(sensor_data, (double)(-turn_amount));
+                pose_heading_deg += (double)(-turn_amount);
+            }
         }
 
-        turn_to_face(sensor_data, gaps[chosen_gap].chosen_movement_angle);
         if (nav_abort_requested(sensor_data))
         {
             return;
         }
 
-        /* Capture actual mm traveled so target_cm reflects reality if the
-         * bot bumped early or got aborted partway. Clamp the final step so
-         * auto mode does not intentionally drive past the stop distance. */
+        /* Forward step. Clamp to remaining_mm so we do not drive past the
+         * destination, but always leave room for proximity check. */
         {
+            double remaining_mm = remaining_cm * 10.0;
             double move_mm = AUTO_DRIVE_STEP_MM;
-            double remaining_mm = ((double)target_cm
-                                 - (double)TARGET_PROXIMITY_CM) * 10.0;
-            double dist_traveled_mm;
+            double traveled_mm = 0.0;
+            move_result_t res;
 
             if (remaining_mm < move_mm)
             {
@@ -272,34 +411,73 @@ void nav_auto_drive(oi_t *sensor_data, float target_cm, float target_deg)
 
             if (move_mm <= 0.0)
             {
-                uart_sendStr("\r\nArrived within 10 cm of target.\r\n");
-                return;
+                continue;
             }
 
-            dist_traveled_mm = move_forward(sensor_data, move_mm);
-            target_cm -= (float)(dist_traveled_mm / 10.0);
-        }
-        if (nav_abort_requested(sensor_data))
-        {
-            return;
-        }
+            res = move_forward_auto(sensor_data, move_mm, &traveled_mm);
 
-        if (target_cm < 0.0f)
-        {
-            target_cm = 0.0f;
-        }
+            /* Update pose by actual distance traveled. */
+            {
+                double hdg_rad = pose_heading_deg * M_PI / 180.0;
+                double traveled_cm = traveled_mm / 10.0;
+                pose_x_cm += traveled_cm * sin(hdg_rad);
+                pose_y_cm += traveled_cm * cos(hdg_rad);
+            }
 
-        /* Highest priority: cliff/boundary. Override bump check if both. */
-        if (boundrydetection(sensor_data))
-        {
-            continue;
-        }
+            switch (res)
+            {
+            case MOVE_ABORT:
+                (void)nav_abort_requested(sensor_data);
+                return;
 
-        if (sensor_data->bumpLeft || sensor_data->bumpRight)
-        {
-            nav_bump_avoidance(sensor_data,
-                               sensor_data->bumpRight,
-                               sensor_data->bumpLeft);
+            case MOVE_BOUNDARY:
+                /* boundrydetection() prints + executes the escape maneuver
+                 * (back up + 180 turn). Update pose to match. */
+                if (boundrydetection(sensor_data))
+                {
+                    double hdg_rad = pose_heading_deg * M_PI / 180.0;
+                    pose_x_cm -= (BACKUP_DIST_MM / 10.0) * sin(hdg_rad);
+                    pose_y_cm -= (BACKUP_DIST_MM / 10.0) * cos(hdg_rad);
+                    pose_heading_deg -= 180.0;
+                }
+                break;
+
+            case MOVE_BUMP:
+                nav_bump_avoidance(sensor_data,
+                                   sensor_data->bumpRight,
+                                   sensor_data->bumpLeft);
+                /* Net pose change: back up BACKUP_DIST_MM along current
+                 * heading, then sidestep LATERAL_DIST_MM perpendicular to
+                 * it. The maneuver returns to the original heading. */
+                {
+                    double hdg_rad = pose_heading_deg * M_PI / 180.0;
+                    double back_cm = BACKUP_DIST_MM / 10.0;
+                    double side_cm = LATERAL_DIST_MM / 10.0;
+                    int hit_left = sensor_data->bumpLeft;
+
+                    pose_x_cm -= back_cm * sin(hdg_rad);
+                    pose_y_cm -= back_cm * cos(hdg_rad);
+
+                    /* Sidestep direction: hit_left -> step right (+x rel),
+                     * else step left (-x rel). In world frame, "right of
+                     * heading" rotates the heading vector by -90 deg. */
+                    if (hit_left)
+                    {
+                        pose_x_cm += side_cm * cos(hdg_rad);
+                        pose_y_cm -= side_cm * sin(hdg_rad);
+                    }
+                    else
+                    {
+                        pose_x_cm -= side_cm * cos(hdg_rad);
+                        pose_y_cm += side_cm * sin(hdg_rad);
+                    }
+                }
+                break;
+
+            case MOVE_OK:
+            default:
+                break;
+            }
         }
     }
 }
@@ -452,7 +630,16 @@ int boundrydetection(oi_t *sensor_data)
      * We do NOT call turn_to_face here because the gap-based loop has no
      * "smallest object" reference — escape direction is just "behind us". */
     oi_setWheels(0, 0);
-    uart_sendStr("\r\n[CLIFF] Boundary detected — backing up and turning around.\r\n");
+    {
+        char line[140];
+        sprintf(line, "\r\n[CLIFF] Boundary detected — backing up and turning around.\r\n"
+                      "  cliffL=%u FL=%u FR=%u R=%u\r\n",
+                (unsigned)sensor_data->cliffLeftSignal,
+                (unsigned)sensor_data->cliffFrontLeftSignal,
+                (unsigned)sensor_data->cliffFrontRightSignal,
+                (unsigned)sensor_data->cliffRightSignal);
+        uart_sendStr(line);
+    }
     lcd_clear();
     lcd_printf("Boundary!\nEscape...");
 

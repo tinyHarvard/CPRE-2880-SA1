@@ -68,6 +68,80 @@
 #define SERVO_CAL_LEFT      1224750     /* Pulse width for 180° (leftmost) */
 
 /**
+ * uart_read_line - Read a CR/LF-terminated line via the RX-interrupt path.
+ *
+ * Polls `last_char_received` (set by UART1_Handler) one byte at a time,
+ * echoing each character back to the user. Backspace edits in place.
+ * Returns when the user presses Enter (CR or LF). The buffer is always
+ * null-terminated. Maximum length includes the terminator.
+ */
+static void uart_read_line(char *buf, int max_len)
+{
+    int idx = 0;
+    char c;
+
+    if (max_len <= 0)
+    {
+        return;
+    }
+
+    while (1)
+    {
+        if (last_char_received == 0)
+        {
+            timer_waitMillis(1);
+            continue;
+        }
+
+        c = last_char_received;
+        last_char_received = 0;
+
+        if (c == '\r' || c == '\n')
+        {
+            uart_sendStr("\r\n");
+            break;
+        }
+
+        if (c == '\b' || c == 0x7F)
+        {
+            if (idx > 0)
+            {
+                idx--;
+                uart_sendStr("\b \b");
+            }
+            continue;
+        }
+
+        if (idx < max_len - 1)
+        {
+            buf[idx++] = c;
+            uart_sendChar(c);
+        }
+    }
+
+    buf[idx] = '\0';
+}
+
+/**
+ * prompt_float - Print a prompt and read a floating-point value from UART.
+ * Returns 1 on success, 0 if parsing failed.
+ */
+static int prompt_float(const char *prompt, float *out)
+{
+    char line[32];
+
+    uart_sendStr(prompt);
+    uart_read_line(line, sizeof line);
+
+    if (sscanf(line, "%f", out) != 1)
+    {
+        uart_sendStr("  Could not parse number.\r\n");
+        return 0;
+    }
+    return 1;
+}
+
+/**
  * print_menu - Display the main command menu to PuTTY
  *
  * Called at startup and after returning from auto/manual modes so the
@@ -192,28 +266,33 @@ void main(void)
             uart_sendStr("\r\nReady for next command.\r\n");
             break;
 
-        /* ---- 'g': Autonomous drive to target (Part 4 checkpoint) -------- */
+        /* ---- 'g': Autonomous drive to a user-specified destination ----- */
         case 'g':
         {
             float target_cm = 0.0f;
             float target_deg = 90.0f;
 
-            lcd_clear();
-            lcd_printf("Scanning...");
+            uart_sendStr("\r\n--- Set Destination ---\r\n"
+                         "  Bearing: 0=right, 90=ahead, 180=left "
+                         "(servo frame at start).\r\n");
 
-            obj_count = scan_objects(objects, MAX_OBJECTS);
-            print_object_table(objects, obj_count);
-            smallest_idx = find_smallest_linear(objects, obj_count);
-
-            if (smallest_idx < 0)
+            if (!prompt_float("  Distance (cm):  ", &target_cm) ||
+                !prompt_float("  Bearing  (deg): ", &target_deg))
             {
-                uart_sendStr("\r\nNo objects found.\r\n");
                 print_menu();
                 break;
             }
 
-            target_cm = objects[smallest_idx].ping_dist;
-            target_deg = objects[smallest_idx].center_angle;
+            if (target_cm <= 0.0f)
+            {
+                uart_sendStr("  Distance must be > 0.\r\n");
+                print_menu();
+                break;
+            }
+
+            lcd_clear();
+            lcd_printf("Auto: %.0fcm\n@%.0f deg",
+                       (double)target_cm, (double)target_deg);
 
             nav_auto_drive(sensor_data, target_cm, target_deg);
             print_menu();

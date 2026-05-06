@@ -4,6 +4,37 @@
 #include "open_interface.h"
 #include "scan.h"
 
+/**
+ * move_result_t - Reason a forward auto-move stopped.
+ *
+ * MOVE_OK       — completed the requested distance.
+ * MOVE_BUMP     — bumpLeft or bumpRight asserted.
+ * MOVE_BOUNDARY — a cliff signal hit the tape (>=2500) or drop-off (<=500) range.
+ * MOVE_ABORT    — UART command_flag was set (user pressed a key).
+ */
+typedef enum {
+    MOVE_OK,
+    MOVE_BUMP,
+    MOVE_BOUNDARY,
+    MOVE_ABORT
+} move_result_t;
+
+/**
+ * move_forward_auto - Forward drive used by autonomous mode.
+ *
+ * Same loop shape as move_forward(), but each oi_update tick also checks
+ * the four cliff signals so the bot stops on tape mid-step instead of
+ * waiting for the full requested distance to elapse.
+ *
+ * @param sensor_data       Pointer to oi_t struct.
+ * @param distance_mm       Target distance in mm.
+ * @param out_traveled_mm   If non-NULL, receives the actual mm traveled.
+ * @return                  MOVE_OK, MOVE_BUMP, MOVE_BOUNDARY, or MOVE_ABORT.
+ */
+move_result_t move_forward_auto(oi_t *sensor_data,
+                                double distance_mm,
+                                double *out_traveled_mm);
+
 void nav_auto_drive(oi_t *sensor_data, float target_cm, float target_deg);
 
 char nav_manual_mode(oi_t *sensor_data);

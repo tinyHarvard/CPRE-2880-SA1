@@ -416,6 +416,9 @@ int select_gap(detected_gap_t gaps[], int gap_count, float target_angle)
 
     for (i = 0; i < gap_count; i++)
     {
+        float gap_start = (float)gaps[i].gap_start_angle;
+        float gap_end   = (float)gaps[i].gap_end_angle;
+        float gap_width_deg = gap_end - gap_start;
         float chosen_angle;
 
         if (gaps[i].viable == 0)
@@ -428,21 +431,35 @@ int select_gap(detected_gap_t gaps[], int gap_count, float target_angle)
             float angbob = 35.0f / gaps[i].dist;
             angbob = angbob * 180.0f / (float)M_PI;
 
-            if (fabsf(target_angle - gaps[i].gap_start_angle)
-                > fabsf(target_angle - gaps[i].gap_end_angle))
+            /* Only apply the clearance offset if the gap is wide enough
+             * to fit it on both sides; otherwise the offset overshoots
+             * the gap and we land outside the chosen opening. */
+            if (gap_width_deg > 2.0f * angbob)
             {
-                chosen_angle = (float)gaps[i].gap_end_angle - angbob;
+                if (fabsf(target_angle - gap_start)
+                    > fabsf(target_angle - gap_end))
+                {
+                    chosen_angle = gap_end - angbob;
+                }
+                else
+                {
+                    chosen_angle = gap_start + angbob;
+                }
             }
             else
             {
-                chosen_angle = (float)gaps[i].gap_start_angle + angbob;
+                chosen_angle = (gap_start + gap_end) / 2.0f;
             }
         }
         else
         {
-            chosen_angle = ((float)gaps[i].gap_start_angle
-                           + (float)gaps[i].gap_end_angle) / 2.0f;
+            chosen_angle = (gap_start + gap_end) / 2.0f;
         }
+
+        /* Clamp to gap bounds so chosen_movement_angle is always inside
+         * [gap_start_angle, gap_end_angle]. */
+        if (chosen_angle < gap_start) chosen_angle = gap_start;
+        if (chosen_angle > gap_end)   chosen_angle = gap_end;
 
         gaps[i].chosen_movement_angle = chosen_angle;
         gaps[i].deg_from_goal = fabsf(chosen_angle - target_angle);
@@ -523,25 +540,6 @@ int gap_measurment(detected_obj_t objects[], int obj_count, detected_gap_t gaps[
         gaps[k].viable = 0;
         gaps[k].chosen_movement_angle = 0.0f;
         k++;
-    }
-
-    {
-        char line[120];
-
-        uart_sendStr("\r\n======================== Detected Gaps =========================\r\n");
-        sprintf(line, "Gap#   start angle:   end angle:   gap width:   viable:\r\n");
-        uart_sendStr(line);
-        uart_sendStr("----  ----------  ----------  ------------  ------------  --------\r\n");
-
-        for (i = 0; i < k; i++)
-        {
-            sprintf(line, "%d    %d     %d     %f \r\n",
-                    i + 1,
-                    gaps[i].gap_start_angle,
-                    gaps[i].gap_end_angle,
-                    gaps[i].lin_gap_between_obj);
-            uart_sendStr(line);
-        }
     }
 
     return k;
