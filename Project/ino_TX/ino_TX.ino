@@ -3,7 +3,7 @@
 #define TX_ID 1
 BLEService beaconService("1809");
 static uint16_t seq = 0;
-const int8_t TX_POWER_DBM = -62;
+const int8_t TX_POWER_DBM = -74;
 
 void setup() {
     Serial.begin(115200);
@@ -49,11 +49,11 @@ void loop() {
     BLE.setManufacturerData(mfr, sizeof(mfr));
     BLE.advertise();
 
-    if (Serial) {
-        Serial.print("TX_"); Serial.print(TX_ID);
-        Serial.print(" seq="); Serial.print(seq);
-        Serial.print(" ts="); Serial.println(ts);
-    }
+//    if (Serial) {
+//        Serial.print("TX_"); Serial.print(TX_ID);
+//        Serial.print(" seq="); Serial.print(seq);
+//        Serial.print(" ts="); Serial.println(ts);
+//    }
 
     delay(200);
 }
