@@ -53,7 +53,9 @@
 
 /* Minimum angular width (degrees) to count as a real object.
  * Objects narrower than this are likely noise blips.                        */
-#define MIN_OBJ_WIDTH   2
+#define MIN_OBJ_WIDTH   6
+
+#define CYBOT_CLEARANCE_CM 35.0f
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -113,6 +115,34 @@ static float average_ir_reading(int angle, float *ping_out)
     }
 
     return ir_sum / IR_NUM_SAMPLES;
+}
+
+static float angle_to_rad(int angle_deg)
+{
+    return ((float)angle_deg - 90.0f) * (float)M_PI / 180.0f;
+}
+
+static float polar_x(float dist_cm, int angle_deg)
+{
+    return dist_cm * sinf(angle_to_rad(angle_deg));
+}
+
+static float polar_y(float dist_cm, int angle_deg)
+{
+    return dist_cm * cosf(angle_to_rad(angle_deg));
+}
+
+static float edge_gap_width_cm(const detected_obj_t *left_obj,
+                               const detected_obj_t *right_obj)
+{
+    float left_x = polar_x(left_obj->ping_dist, left_obj->end_angle);
+    float left_y = polar_y(left_obj->ping_dist, left_obj->end_angle);
+    float right_x = polar_x(right_obj->ping_dist, right_obj->start_angle);
+    float right_y = polar_y(right_obj->ping_dist, right_obj->start_angle);
+    float dx = right_x - left_x;
+    float dy = right_y - left_y;
+
+    return sqrtf((dx * dx) + (dy * dy));
 }
 
 /**
@@ -356,11 +386,10 @@ void print_gap_table(detected_gap_t gaps[], int gap_count)
 
 }
 int find_viable_angles(detected_gap_t gaps[], int gap_count){
-float sybotlinwidth=35;
 int i=0;
 for (i = 0; i < gap_count; i++){
 
-   if(gaps[i].lin_gap_between_obj>=sybotlinwidth){
+   if(gaps[i].lin_gap_between_obj>=CYBOT_CLEARANCE_CM){
 
        gaps[i].viable=1;
 
@@ -474,9 +503,8 @@ int gap_measurment(detected_obj_t objects[], int obj_count, detected_gap_t gaps[
         gaps[k].gap_start_angle = objects[i - 1].end_angle;
         gaps[k].gap_end_angle = objects[i].start_angle;
         gaps[k].dist = dist;
-        gaps[k].lin_gap_between_obj = dist
-                                    * ((float)(gaps[k].gap_end_angle
-                                    - gaps[k].gap_start_angle) * (float)M_PI / 180.0f);
+        gaps[k].lin_gap_between_obj = edge_gap_width_cm(&objects[i - 1],
+                                                        &objects[i]);
         gaps[k].deg_from_goal = 0.0f;
         gaps[k].viable = 0;
         gaps[k].chosen_movement_angle = 0.0f;

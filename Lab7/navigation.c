@@ -41,7 +41,7 @@
 #define LATERAL_DIST_MM     250.0   /* mm to sidestep around obstacle         */
 #define TURN_ANGLE_DEG      80.0    /* calibrated 90° turn (Lab 2 value)      */
 #define TARGET_PROXIMITY_CM 15    /* stop when this close to target (cm)    */
-#define AUTO_DRIVE_STEP_MM  50.0   /* mm per forward increment in auto mode  */
+#define AUTO_DRIVE_STEP_MM  300.0  /* mm per forward increment in auto mode  */
 #define MANUAL_DRIVE_DIST   100.0   /* mm per 'w'/'s' keypress               */
 #define MANUAL_TURN_DEG     15.0    /* degrees per 'a'/'d' keypress           */
 
@@ -192,7 +192,7 @@ void nav_bump_avoidance(oi_t *sensor_data, int hit_right, int hit_left)
  * State machine:
  *   SCAN    -> detect all objects, find smallest linear width
  *   TURN    -> rotate to face the target
- *   DRIVE   -> move forward in 100mm increments
+ *   DRIVE   -> move forward in 300mm increments
  *   BUMP    -> if bump detected, run avoidance
  *   RE-SCAN -> after avoidance, re-scan to relocate target
  *   STOP    -> within 10cm of target, halt and report
@@ -243,9 +243,10 @@ void nav_auto_drive(oi_t *sensor_data, float target_cm, float target_deg)
 
         {
             char line[120];
-            sprintf(line, "chosen gap: %d Angle: %f\r\n",
+            sprintf(line, "chosen gap: %d Angle: %.1f deg Width: %.1f cm\r\n",
                     chosen_gap + 1,
-                    gaps[chosen_gap].chosen_movement_angle);
+                    gaps[chosen_gap].chosen_movement_angle,
+                    gaps[chosen_gap].lin_gap_between_obj);
             uart_sendStr(line);
         }
 
@@ -256,14 +257,33 @@ void nav_auto_drive(oi_t *sensor_data, float target_cm, float target_deg)
         }
 
         /* Capture actual mm traveled so target_cm reflects reality if the
-         * bot bumped early or got aborted partway. */
-        double dist_traveled_mm = move_forward(sensor_data, AUTO_DRIVE_STEP_MM);
+         * bot bumped early or got aborted partway. Clamp the final step so
+         * auto mode does not intentionally drive past the stop distance. */
+        {
+            double move_mm = AUTO_DRIVE_STEP_MM;
+            double remaining_mm = ((double)target_cm
+                                 - (double)TARGET_PROXIMITY_CM) * 10.0;
+            double dist_traveled_mm;
+
+            if (remaining_mm < move_mm)
+            {
+                move_mm = remaining_mm;
+            }
+
+            if (move_mm <= 0.0)
+            {
+                uart_sendStr("\r\nArrived within 10 cm of target.\r\n");
+                return;
+            }
+
+            dist_traveled_mm = move_forward(sensor_data, move_mm);
+            target_cm -= (float)(dist_traveled_mm / 10.0);
+        }
         if (nav_abort_requested(sensor_data))
         {
             return;
         }
 
-        target_cm -= (float)(dist_traveled_mm / 10.0);
         if (target_cm < 0.0f)
         {
             target_cm = 0.0f;

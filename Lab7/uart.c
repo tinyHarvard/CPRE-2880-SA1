@@ -230,17 +230,25 @@ void UART1_Handler(void)
         byte_received = (char)(UART1_DR_R & 0xFF);
 
         uart_sendChar(byte_received);
+
+        /* Treat Enter as formatting only, not as a command byte.
+         * Some terminal setups send "\r\n", which would otherwise
+         * overwrite a real command like 'm' with '\n' before main sees it. */
         if (byte_received == '\r')
         {
             uart_sendChar('\n');
+            return;
         }
-        else
+
+        if (byte_received == '\n')
         {
-            last_char_received = byte_received;
-            if (byte_received == command_byte)
-            {
-                command_flag = 1;
-            }
+            return;
+        }
+
+        last_char_received = byte_received;
+        if (byte_received == command_byte)
+        {
+            command_flag = 1;
         }
     }
 }
