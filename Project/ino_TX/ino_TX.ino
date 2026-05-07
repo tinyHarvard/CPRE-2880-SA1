@@ -1,6 +1,7 @@
 #include <ArduinoBLE.h>
 
 #define TX_ID 1
+static_assert(TX_ID >= 0 && TX_ID <= 255, "TX_ID must be between 0 and 255");
 BLEService beaconService("1809");
 static uint16_t seq = 0;
 const int8_t TX_POWER_DBM = -74;
