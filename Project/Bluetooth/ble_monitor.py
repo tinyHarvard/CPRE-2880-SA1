@@ -25,7 +25,7 @@ DWELL_TIME      = 10.0      # seconds to collect at each stop
 MIN_SAMPLES_POS = 50       # minimum samples before a stop is "ready"
 AUTO_ADVANCE    = False     # True = auto-advance after DWELL_TIME
                             # False = wait for "Next Position" button
-TRANSIT_TIME    = 5.0       # seconds between stops for bot to travel
+TRANSIT_TIME    = 10.0       # seconds between stops for bot to travel
 
 # ── Filtering config ──────────────────────────────────────────────────────────
 ZSCORE_THRESH   = 2.0
@@ -34,17 +34,17 @@ EWM_ALPHA       = 0.3
 MIN_SAMPLES     = 5
 
 # ── Trilateration config ──────────────────────────────────────────────────────
-TX_POWER_1M = -74.0
-PATH_LOSS   = 3
+TX_POWER_1M = -68.5
+PATH_LOSS   = 3.4
 NUM_ANCHORS = 6
 
-DEFAULT_ANCHOR_POS = {
-    0: (-10,  -10),
-    1: ( 45,  -10),
-    2: ( 80,  -10),
-    3: ( 80,   50),
-    4: ( 45,   50),
-    5: (-10,   50),
+DEFAULT_ANCHOR_POS = { # grid: (427, 244) Actual anchor points
+    0: ( -100,  -100),
+    1: ( 214,  -100),
+    2: ( 527,  -100),
+    3: ( 527,   344),
+    4: ( 214,   344),
+    5: (-100,   344),
 }
 
 TX_COLORS = {0: "blue", 1: "green", 2: "orange", 3: "purple", 4: "red", 5: "brown"}
@@ -54,16 +54,16 @@ TX_LABELS = {i: f"Stop {i}" for i in range(NUM_ANCHORS)}
 rssi_buffers    = {i: deque(maxlen=WINDOW) for i in range(NUM_ANCHORS)}
 anchor_pos      = dict(DEFAULT_ANCHOR_POS)
 ema_dist        = {i: None for i in range(NUM_ANCHORS)}
-locked_dist     = {i: None for i in range(NUM_ANCHORS)}  # distance locked when stop is ready
+locked_dist     = {i: None for i in range(NUM_ANCHORS)}
 data_lock       = threading.Lock()
 
 current_stop    = 0
-transit_to      = -1              # which stop the bot is currently heading toward
-stop_start_time = [time.monotonic()]   # list so threads can update it
+transit_to      = -1
+stop_start_time = [time.monotonic()]
 stop_ready      = {i: False for i in range(NUM_ANCHORS)}
 collecting      = True
 advance_event   = threading.Event()
-start_event     = threading.Event()   # set when user clicks Start
+start_event     = threading.Event()
 state_lock      = threading.Lock()
 
 
@@ -122,16 +122,16 @@ def arduino_reader_thread(port: str):
 def stop_manager_thread():
     global current_stop, collecting, transit_to
 
-    # wait for user to press Start
     print("[SETUP] Waiting for Start button…")
     start_event.wait()
     print("[SETUP] Started.")
 
-    # reset EMA so stale values from a previous run don't seed the filter
+    # reset all state for fresh run
     with data_lock:
         for i in range(NUM_ANCHORS):
             ema_dist[i]    = None
             locked_dist[i] = None
+            rssi_buffers[i].clear()
 
     for stop_idx in range(NUM_ANCHORS):
         if stop_idx > 0:
@@ -146,8 +146,9 @@ def stop_manager_thread():
             current_stop = stop_idx
             stop_start_time[0] = time.monotonic()
 
-        # reset EMA for this stop so it starts fresh from first reading
+        # clear buffer and reset EMA — start completely fresh at this stop
         with data_lock:
+            rssi_buffers[stop_idx].clear()
             ema_dist[stop_idx] = None
 
         print(f"\n[MOVE] Arrived at position {stop_idx}  {anchor_pos[stop_idx]}")
@@ -167,40 +168,36 @@ def stop_manager_thread():
         with state_lock:
             stop_ready[stop_idx] = (n >= MIN_SAMPLES_POS)
 
-        # lock the distance for this stop based on final averaged RSSI
-        MAX_PLAUSIBLE_DIST = 300.0   # units — discard stops with unrealistic distances
+        # lock distance using mean for sub-dBm precision
+        MAX_PLAUSIBLE_DIST = 300.0
         if buf:
             filt = filter_rssi(buf)
-            med  = statistics.median(filt)
-            d    = rssi_to_distance(med)
+            avg  = sum(filt) / len(filt)   # mean for fractional dBm precision
+            d    = rssi_to_distance(avg)
             if d <= MAX_PLAUSIBLE_DIST:
                 with data_lock:
                     locked_dist[stop_idx] = d
-                print(f"  locked_dist[{stop_idx}] = {d:.2f}")
+                print(f"  locked_dist[{stop_idx}] = {d:.2f}  (n={n}  avg_rssi={avg:.2f})")
             else:
-                print(f"  [WARN] Stop {stop_idx} distance {d:.2f} exceeds max — discarded")
+                print(f"  [WARN] Stop {stop_idx} dist={d:.2f} exceeds max — discarded")
 
-        avg = sum(buf) / len(buf) if buf else 0
         print(f"[STOP {stop_idx}] Samples: {n}  |  Ready: {stop_ready[stop_idx]}")
 
     with state_lock:
         collecting = False
 
-    # Final summary
+    # Final summary using locked distances
     print("\n=== Collection Complete ===")
     circles = []
     for i in range(NUM_ANCHORS):
         with data_lock:
-            buf = list(rssi_buffers[i])
-        if not buf:
-            print(f"  Stop {i}: 0 samples — skipped")
+            d = locked_dist[i]
+            n = len(rssi_buffers[i])
+        if d is None:
+            print(f"  Stop {i}: no locked distance — skipped")
             continue
-        filt = filter_rssi(buf)
-        med  = statistics.median(filt)
-        d    = rssi_to_distance(med)
         circles.append((anchor_pos[i], d))
-        print(f"  Stop {i} {anchor_pos[i]}: {len(buf)} samples  "
-              f"median={med:.1f} dBm  dist={d:.2f} units")
+        print(f"  Stop {i} {anchor_pos[i]}: {n} samples  dist={d:.2f} units")
 
     if len(circles) >= 3:
         result = trilaterate(circles)
@@ -333,30 +330,30 @@ def run_plot():
     # ── Banner ────────────────────────────────────────────────────────────────
     ax_pos.axis("off")
     pos_banner = ax_pos.text(
-        0.5, 0.5, "Move sensor to Stop 0…",
+        0.5, 0.5, "Press Start to begin",
         ha="center", va="center", fontsize=13, fontweight="bold",
         transform=ax_pos.transAxes,
         bbox=dict(boxstyle="round,pad=0.4", facecolor="#ffffcc", edgecolor="#bbbb00")
     )
 
-    # ── Start button (always shown) ───────────────────────────────────────────
+    # ── Start button ──────────────────────────────────────────────────────────
     ax_start  = fig.add_axes([0.44, 0.046, 0.12, 0.04])
-    start_btn = widgets.Button(ax_start, "▶ Start",
+    start_btn = widgets.Button(ax_start, "Start",
                                color="#c8f0c8", hovercolor="#90d890")
     started = [False]
     def on_start(_):
         if not started[0]:
             started[0] = True
-            start_btn.label.set_text("Running…")
+            start_btn.label.set_text("Running...")
             start_btn.color      = "#dddddd"
             start_btn.hovercolor = "#dddddd"
             start_event.set()
     start_btn.on_clicked(on_start)
 
-    # ── Next button (shown only when AUTO_ADVANCE=False) ──────────────────────
+    # ── Next button ───────────────────────────────────────────────────────────
     if not AUTO_ADVANCE:
         ax_btn   = fig.add_axes([0.44, 0.001, 0.12, 0.04])
-        next_btn = widgets.Button(ax_btn, "Next Position ▶",
+        next_btn = widgets.Button(ax_btn, "Next Position",
                                   color="#c8e0ff", hovercolor="#80b0ff")
         next_btn.on_clicked(lambda _: advance_event.set())
 
@@ -403,7 +400,7 @@ def run_plot():
 
     # ── Table ─────────────────────────────────────────────────────────────────
     ax_table.axis("off")
-    col_labels = ["Stop", "Position", "Samples", "Median RSSI (dBm)", "Distance (EMA)", "Status"]
+    col_labels = ["Stop", "Position", "Samples", "Avg RSSI (dBm)", "Distance", "Status"]
     blank = [["—"] * len(col_labels) for _ in range(NUM_ANCHORS)]
     tbl   = ax_table.table(cellText=blank, colLabels=col_labels,
                             loc="center", cellLoc="center")
@@ -422,9 +419,10 @@ def run_plot():
             all_done = not collecting
 
         with data_lock:
-            bufs = {i: list(rssi_buffers[i]) for i in range(NUM_ANCHORS)}
+            bufs   = {i: list(rssi_buffers[i]) for i in range(NUM_ANCHORS)}
+            locked = dict(locked_dist)
 
-        # sensor dot on map
+        # sensor dot
         if stop >= 0:
             sx, sy = anchor_pos[stop]
             sensor_dot.set_data([sx], [sy])
@@ -432,7 +430,6 @@ def run_plot():
             sensor_dot.set_data([], [])
 
         # table + range circles
-        avg_data = {}
         for i in range(NUM_ANCHORS):
             buf   = bufs[i]
             alpha = 1.0 if ready[i] else (0.8 if i == stop else 0.3)
@@ -444,23 +441,26 @@ def run_plot():
                 tbl[i+1, 3].get_text().set_text("—")
                 tbl[i+1, 4].get_text().set_text("—")
                 tbl[i+1, 5].get_text().set_text("Waiting" if i == stop else "Not yet")
+                range_circles[i].set_radius(0)
                 continue
 
             filtered = filter_rssi(buf)
-            med      = statistics.median(filtered)
-            raw_dist = rssi_to_distance(med)
+            avg      = sum(filtered) / len(filtered)
+            raw_dist = rssi_to_distance(avg)
             dist     = smoothed_distance(i, raw_dist)
-            avg_data[i] = (med, dist)
 
-            range_circles[i].set_radius(dist if ready[i] else 0)
+            # use locked distance for circle if ready
+            circle_r = locked[i] if ready[i] and locked[i] else 0
+            range_circles[i].set_radius(circle_r)
             range_circles[i].center = anchor_pos[i]
 
-            status = "✓ Ready" if ready[i] else (
-                f"Collecting… ({len(buf)}/{MIN_SAMPLES_POS})" if i == stop else "Queued")
+            status = "Ready" if ready[i] else (
+                f"Collecting ({len(buf)}/{MIN_SAMPLES_POS})" if i == stop else "Queued")
 
             tbl[i+1, 2].get_text().set_text(str(len(buf)))
-            tbl[i+1, 3].get_text().set_text(f"{med:.1f}")
-            tbl[i+1, 4].get_text().set_text(f"{dist:.2f}")
+            tbl[i+1, 3].get_text().set_text(f"{avg:.1f}")
+            tbl[i+1, 4].get_text().set_text(f"{dist:.2f}" if not ready[i]
+                                             else f"{locked[i]:.2f}" if locked[i] else "—")
             tbl[i+1, 5].get_text().set_text(status)
 
         # live RSSI line
@@ -471,25 +471,22 @@ def run_plot():
         if not all_done:
             elapsed = time.monotonic() - stop_start_time[0]
             if not start_event.is_set():
-                pos_banner.set_text("Press ▶ Start to begin collection")
+                pos_banner.set_text("Press Start to begin collection")
             elif stop < 0:
-                transit_remaining = max(0.0, TRANSIT_TIME - elapsed)
-                dest_pos = anchor_pos[t_to] if t_to >= 0 else "?"
+                remaining = max(0.0, TRANSIT_TIME - elapsed)
+                dest_pos  = anchor_pos[t_to] if t_to >= 0 else "?"
                 pos_banner.set_text(
-                    f"In transit -> Stop {t_to}  {dest_pos} "
-                    f"  ({transit_remaining:.1f}s remaining)")
+                    f"In transit -> Stop {t_to}  {dest_pos}  ({remaining:.1f}s remaining)")
             elif AUTO_ADVANCE:
                 remaining = max(0.0, DWELL_TIME - elapsed)
                 pos_banner.set_text(
-                    f"Stop {stop} / {NUM_ANCHORS-1}  —  Position {anchor_pos[stop]}"
+                    f"Stop {stop} / {NUM_ANCHORS-1}  —  {anchor_pos[stop]}"
                     f"  |  Collecting ({remaining:.1f}s left, {len(bufs[stop])} samples)")
             else:
                 pos_banner.set_text(
-                    f"Stop {stop} / {NUM_ANCHORS-1}  —  Position {anchor_pos[stop]}"
+                    f"Stop {stop} / {NUM_ANCHORS-1}  —  {anchor_pos[stop]}"
                     f"  |  {len(bufs[stop])} samples  |  Press 'Next Position' when ready")
         else:
-            with data_lock:
-                locked = dict(locked_dist)
             ready_ids = [i for i in range(NUM_ANCHORS)
                          if ready[i] and locked[i] is not None]
             if len(ready_ids) >= 3:
@@ -497,7 +494,7 @@ def run_plot():
                 if not printed_result[0]:
                     print("\n=== Trilateration Input ===")
                     for i in ready_ids:
-                        print(f"  Stop {i} pos={anchor_pos[i]}  locked_dist={locked[i]:.2f}")
+                        print(f"  Stop {i} pos={anchor_pos[i]}  dist={locked[i]:.2f}")
                 pos = trilaterate(circles)
                 if pos:
                     target_dot.set_data([pos[0]], [pos[1]])
