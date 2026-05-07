@@ -1,115 +1,100 @@
 /**
- * scan.h - Header file for Lab 7 Improved Object Scanning Module
+ * scan.h - Lab 7 IR + PING scan interface (manual variant).
  *
  * Authors: Samar Gill, Ryland Feist
- * AI Tools: Claude (Anthropic) - used for code structure guidance
  *
- * Lab 7: Project Exploration Mission: Integration and Improvement (Mission 2)
- * Parts 1 & 2: Improved object detection and linear width calculation
+ * Implements the two-pass scan from the Lab 7 manual:
+ *   Pass 1 — sweep 0-180 deg, average IR samples per angle, edge-detect
+ *            objects with an IR threshold.
+ *   Pass 2 — point the servo at each object center, take a PING reading,
+ *            compute linear width = ping_dist * radial_rad.
  *
- * Description: Declares the improved scanning interface for Lab 7.
- *   Uses IR sensor for edge detection (finer angular resolution) and
- *   PING sensor for distance measurement at object centers. Multi-sample
- *   IR averaging reduces noise. Objects are ranked by linear width (cm),
- *   not radial width (degrees), so objects at different distances are
- *   compared fairly.
- *
- * REVISION NOTES:
- * - Lab 7: New file — replaces Lab 3 checkpoint3 scanning approach
+ * The manual variant of this file keeps object detection (Parts 1-2)
+ * and the integrated UART output (Part 3). All gap/select/auto-nav
+ * helpers used in the autonomous variant are removed.
  */
 
 #ifndef SCAN_H_
 #define SCAN_H_
 
-/* Maximum number of objects the scan can track at once */
+/* Up to MAX_OBJECTS detections per scan. */
 #define MAX_OBJECTS     10
-/* Up to MAX_OBJECTS+1 gaps are possible: 1 leading + (N-1) between + 1 trailing */
-#define MAX_GAPS        (MAX_OBJECTS + 1)
 
 /**
- * detected_obj_t - Holds all measured properties of a single detected object
+ * detected_obj_t - All measurements for one detected object.
  *
- * start_angle / end_angle: angular edges found via IR threshold detection
- * center_angle: midpoint used for PING distance measurement
- * ping_dist:    distance in cm from the second-pass PING reading
- * radial_width: angular width in degrees (end_angle - start_angle)
- * linear_width: physical width in cm = ping_dist * radial_width_radians
+ *   start_angle / end_angle: IR-derived angular edges (deg)
+ *   center_angle:            midpoint used for the Pass 2 PING read (deg)
+ *   ping_dist:               distance at center (cm), from PING average
+ *   ir_value:                raw IR ADC at center (Pass 2 settle)
+ *   radial_width:            end_angle - start_angle (deg)
+ *   linear_width:            ping_dist * radial_rad (cm)
  */
 typedef struct {
-    int    start_angle;     /* angle where IR first detected object (deg)  */
-    int    end_angle;       /* angle where IR lost the object (deg)        */
-    float  center_angle;    /* midpoint of start and end (deg)             */
-    float  ping_dist;       /* PING distance measured at center (cm)       */
-    float  ir_value;        /* IR raw ADC value at center (Pass 2)         */
-    int    radial_width;    /* angular width in degrees                    */
-    float  linear_width;    /* actual physical width in cm                 */
+    int    start_angle;
+    int    end_angle;
+    float  center_angle;
+    float  ping_dist;
+    float  ir_value;
+    int    radial_width;
+    float  linear_width;
 } detected_obj_t;
 
-typedef struct {
-      float  lin_gap_between_obj; /* gap between objects in cm, measured from closest object */
-      int  gap_start_angle;     /* begining of gap angle */
-      int  gap_end_angle;       /* end of gap angle */
-      float  chosen_movement_angle;  /* angle cybot should move */
-      float  deg_from_goal;
-      int viable;
-      float dist;
-} detected_gap_t;
 /**
- * scan_objects - Perform a full 0-180 degree scan using IR edge detection
- *   and PING distance measurement, then compute linear widths
+ * scan_objects - Two-pass IR + PING scan.
  *
- * This is the main scanning function for Lab 7. It performs two passes:
- *   Pass 1 (IR): Sweep 0-180 collecting averaged IR values at each angle.
- *     Use IR threshold to detect object edges (start/end angles).
- *   Pass 2 (PING): Point servo at each object center, take PING distance
- *     measurement.
- *   Then: Compute linear width = distance * (radial_width * PI / 180)
+ * Sweeps 0-180 deg in fixed steps, averages IR samples per angle to find
+ * object edges, then points the servo at each midpoint and takes a PING
+ * reading. Computes linear width per object. Prints a Pass 1/Pass 2
+ * trace to UART as it goes.
  *
- * The entire scan result is printed to PuTTY as a formatted table.
- *
- * @param objects    Output array where detected objects are stored
- * @param max_count  Maximum number of objects to store (array size)
- * @return           Number of objects actually detected (0 to max_count)
+ * @param objects    Output array of detections.
+ * @param max_count  Maximum number of detections to record.
+ * @return           Number of objects actually detected.
  */
 int scan_objects(detected_obj_t objects[], int max_count);
-/* calibrates the servo on the cybot*/
-void calibrate_servo(void);
-/* measures the gaps between objects*/
-int gap_measurment(detected_obj_t objects[], int obj_count, detected_gap_t gap[]);
-
-
 
 /**
- * find_smallest_linear - Find the object with the smallest linear width
+ * find_smallest_linear - Index of the object with the smallest linear width.
  *
- * Iterates through the array and returns the index of the object whose
- * linear_width field is smallest. Used to identify the navigation target
- * per the Lab 7 spec.
- *
- * @param objects    Array of detected objects (must have ping_dist and
- *                   linear_width already computed)
- * @param obj_count  Number of objects in the array
- * @return           Index of the smallest-width object, or -1 if none found
+ * @return  Index in objects[] or -1 if obj_count is 0.
  */
 int find_smallest_linear(detected_obj_t objects[], int obj_count);
 
 /**
- * print_object_table - Print a formatted table of detected objects to PuTTY
+ * print_object_table - Human-readable object table for PuTTY.
  *
- * Columns: Object#, Center Angle, PING Distance, Radial Width, Linear Width
- * Uses uart_sendStr() from the custom UART1 driver (Lab 5/6).
- *
- * @param objects    Array of detected objects
- * @param obj_count  Number of objects to print
+ * Prints one row per detected object with center angle, PING distance,
+ * radial and linear widths, IR value, and the start/end angles. Marks
+ * the smallest-linear-width object with a trailing '*'.
  */
-
-
 void print_object_table(detected_obj_t objects[], int obj_count);
-/* prints a formatted gap table in to putty*/
-void print_gap_table(detected_gap_t gaps[], int gap_count);
-/* finds out if the cybot can make it through the hole*/
-int find_viable_angles(detected_gap_t gaps[], int gap_count);
-/* selects which gap the cybot is going to drive through*/
-int select_gap(detected_gap_t gap[], int gap_count, float deg);
+
+/**
+ * print_scan_machine_block - GUI-parseable fenced scan dump.
+ *
+ * Emits a clearly-fenced block on UART:
+ *
+ *   <<SCAN_BEGIN count=N>>
+ *   OBJ,index,center_deg,ping_cm,linear_cm,start_deg,end_deg,radial_deg,ir
+ *   ...one OBJ line per object...
+ *   <<SCAN_END>>
+ *
+ * The GUI on the PC side should read between the SCAN_BEGIN / SCAN_END
+ * markers and parse the CSV rows. The human-readable table from
+ * print_object_table() is left intact above this block for direct PuTTY
+ * inspection.
+ */
+void print_scan_machine_block(detected_obj_t objects[], int obj_count);
+
+/**
+ * calibrate_servo - Run the cyBot servo auto-calibration routine.
+ *
+ * Drives the servo to its endpoints and updates the global
+ * right_calibration_value / left_calibration_value pulse widths. Use
+ * this once per CyBot to find the values for the SERVO_CAL_RIGHT /
+ * SERVO_CAL_LEFT defines in lab7_main.c.
+ */
+void calibrate_servo(void);
 
 #endif /* SCAN_H_ */
