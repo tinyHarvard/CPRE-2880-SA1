@@ -28,23 +28,30 @@ AUTO_ADVANCE    = False     # True = auto-advance after DWELL_TIME
 TRANSIT_TIME    = 10.0       # seconds between stops for bot to travel
 
 # ── Filtering config ──────────────────────────────────────────────────────────
-ZSCORE_THRESH   = 2.0
-IQR_FENCE       = 1.5
+ZSCORE_THRESH   = 2.5
+IQR_FENCE       = 2.0
 EWM_ALPHA       = 0.3
-MIN_SAMPLES     = 5
+MIN_SAMPLES     = 100
 
 # ── Trilateration config ──────────────────────────────────────────────────────
-TX_POWER_1M = -68.5
-PATH_LOSS   = 3.4
+TX_POWER_1M = -75.0 # -68.5 -70.5
+PATH_LOSS   = 2.05
 NUM_ANCHORS = 6
 
-DEFAULT_ANCHOR_POS = { # grid: (427, 244) Actual anchor points
+DEFAULT_ANCHOR_POS = {
+    # 0: ( -100,  -100),
+    # 1: ( 214,  -100),
+    # 2: ( 527,  -100),
+    # 3: ( 527,   344),
+    # 4: ( 214,   344),
+    # 5: (-100,   344),
+
     0: ( -100,  -100),
-    1: ( 214,  -100),
-    2: ( 527,  -100),
-    3: ( 527,   344),
-    4: ( 214,   344),
-    5: (-100,   344),
+    1: ( -100,  214),
+    2: ( -100,  527),
+    3: ( 344,   527),
+    4: ( 344,   214),
+    5: ( 344,   -100),
 }
 
 TX_COLORS = {0: "blue", 1: "green", 2: "orange", 3: "purple", 4: "red", 5: "brown"}
@@ -172,12 +179,12 @@ def stop_manager_thread():
         MAX_PLAUSIBLE_DIST = 300.0
         if buf:
             filt = filter_rssi(buf)
-            avg  = sum(filt) / len(filt)   # mean for fractional dBm precision
-            d    = rssi_to_distance(avg)
+            med  = statistics.median(filt)
+            d    = rssi_to_distance(med)
             if d <= MAX_PLAUSIBLE_DIST:
                 with data_lock:
                     locked_dist[stop_idx] = d
-                print(f"  locked_dist[{stop_idx}] = {d:.2f}  (n={n}  avg_rssi={avg:.2f})")
+                    print(f"  locked_dist[{stop_idx}] = {d:.2f}  (n={n}  median_rssi={med:.2f})")
             else:
                 print(f"  [WARN] Stop {stop_idx} dist={d:.2f} exceeds max — discarded")
 
@@ -226,9 +233,14 @@ def filter_rssi(samples: list) -> list:
     clean = arr[(arr >= lo) & (arr <= hi)].tolist()
     return clean if clean else samples
 
-
 def rssi_to_distance(rssi_dbm: float) -> float:
-    return 10.0 ** ((TX_POWER_1M - rssi_dbm) / (10.0 * PATH_LOSS)) * 100
+    if rssi_dbm >= -73.0:       # 0 - 2m:   n = 1.00
+        n = 2.56
+    elif rssi_dbm >= -78.0:     # 2m - 3m:  n = 3.98
+        n = 1.83
+    else:                       # > 3m:     n = 2.36 (average)
+        n = 0.8
+    return 10.0 ** ((TX_POWER_1M - rssi_dbm) / (10.0 * n)) * 100
 
 
 def smoothed_distance(anchor_id: int, raw_dist: float) -> float:
@@ -400,7 +412,7 @@ def run_plot():
 
     # ── Table ─────────────────────────────────────────────────────────────────
     ax_table.axis("off")
-    col_labels = ["Stop", "Position", "Samples", "Avg RSSI (dBm)", "Distance", "Status"]
+    col_labels = ["Stop", "Position", "Samples", "Median RSSI (dBm)", "Distance", "Status"]
     blank = [["—"] * len(col_labels) for _ in range(NUM_ANCHORS)]
     tbl   = ax_table.table(cellText=blank, colLabels=col_labels,
                             loc="center", cellLoc="center")
@@ -445,8 +457,8 @@ def run_plot():
                 continue
 
             filtered = filter_rssi(buf)
-            avg      = sum(filtered) / len(filtered)
-            raw_dist = rssi_to_distance(avg)
+            med      = statistics.median(filtered)
+            raw_dist = rssi_to_distance(med)
             dist     = smoothed_distance(i, raw_dist)
 
             # use locked distance for circle if ready
@@ -458,7 +470,7 @@ def run_plot():
                 f"Collecting ({len(buf)}/{MIN_SAMPLES_POS})" if i == stop else "Queued")
 
             tbl[i+1, 2].get_text().set_text(str(len(buf)))
-            tbl[i+1, 3].get_text().set_text(f"{avg:.1f}")
+            tbl[i+1, 3].get_text().set_text(f"{med:.1f}")
             tbl[i+1, 4].get_text().set_text(f"{dist:.2f}" if not ready[i]
                                              else f"{locked[i]:.2f}" if locked[i] else "—")
             tbl[i+1, 5].get_text().set_text(status)
